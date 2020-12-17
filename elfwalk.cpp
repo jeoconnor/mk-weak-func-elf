@@ -1,9 +1,11 @@
-#include "stdio.h"
-#include "getopt.h"
-#include "stdlib.h"
-#include "elf.h"
+#include <iostream>
+#include <stdio.h>
+#include <getopt.h>
+#include <stdlib.h>
+#include <elf.h>
 #include <map>
 #include <string>
+#include <tuple>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -11,15 +13,30 @@
 #include <fcntl.h>
 #include <cstring>
 
-std::map<int, std::string> stt_name;
-std::map<int, std::string> stb_name;
-std::map<int, std::string> sht_name;
-std::map<int, std::string> strtab;
-std::map<int, std::string> shstrtab;
-std::map<int, std::string> symtab;
-std::map<std::string, int> symtab_lookup;
+using namespace std;
 
-static void init()
+using TableIntStr = map<int, string>;
+using TableStrInt = map<string, int>;
+
+// using SymbolTable = Table
+
+map<int, string> stt_name;
+map<int, string> stb_name;
+map<int, string> sht_name;
+map<int, string> strtab;
+map<int, string> shstrtab;
+map<int, string> symtab;
+map<string, int> symtab_lookup;
+
+static void usage(const char* name)
+{
+}
+
+/**
+ * For now just define enough entries to get by with my easy test
+ * cases but fill these out later.
+ */
+static void init_tables()
 {
   sht_name[SHT_NULL]      = "NULL";
   sht_name[SHT_SYMTAB]    = "SYMTAB";
@@ -40,26 +57,41 @@ static void init()
   stb_name[STB_WEAK]      = "WEAK";
 }
 
-static bool check_ident(unsigned char ident[EI_NIDENT])
+static bool verify_elf(Elf64_Ehdr* hdr)
 {
-  return (ident[EI_MAG0] == ELFMAG0 &&
-	  ident[EI_MAG1] == ELFMAG1 &&
-	  ident[EI_MAG2] == ELFMAG2 &&
-	  ident[EI_MAG3] == ELFMAG3);
+  // Elf header?
+  bool ok = (hdr->e_ident[EI_MAG0] == ELFMAG0 &&
+	     hdr->e_ident[EI_MAG1] == ELFMAG1 &&
+	     hdr->e_ident[EI_MAG2] == ELFMAG2 &&
+	     hdr->e_ident[EI_MAG3] == ELFMAG3);
+
+  // Relocatable object?
+  ok = ok && (hdr->e_type == ET_REL);
+
+  if (!ok) {
+    printf("error: file not Elf relocatable object\n");
+    return false;
+  }
+
+  return true;
 }
 
-Elf64_Sym* find_symbol_entry(char* buffer, std::string& name)
+/**
+ * Receives a pointer to the start of a Elf64_Sym buffer and the name
+ * of a sumbole to find.  If the symbol is found then the return value
+ * is a pointer to the Elf64 record in the buffer or NULL;
+ */
+Elf64_Sym* find_symbol_entry(Elf64_Sym* buffer, string& name)
 {
   int idx = symtab_lookup[name];
   if (idx == 0)
     return nullptr;
 
-  return (Elf64_Sym*)(buffer + (idx * sizeof(Elf64_Sym)));
+  return buffer + idx;
 }
 
 bool parse_symtab(char* buffer, long size, long entsize)
 {
-  printf("[%s]\n", __func__);
   if (entsize != sizeof(Elf64_Sym)) {
     printf("symtab entry invalid size\n");
     return false;
@@ -80,7 +112,7 @@ bool parse_symtab(char* buffer, long size, long entsize)
   return true;
 }
 
-void parse_strtab(char* buffer, long size, std::map<int, std::string>& table)
+void parse_strtab(char* buffer, long size, map<int, string>& table)
 {
   printf("[%s]\n", __func__);
   buffer++;
@@ -95,36 +127,38 @@ void parse_strtab(char* buffer, long size, std::map<int, std::string>& table)
   }
 }
 
-bool process_file(void* _vPtr)
+bool process_file(Elf64_Ehdr* ehdr)
 {
   printf("%s\n", __func__);
 
-  auto buffer = (char*)_vPtr;
-  auto ehdr = (Elf64_Ehdr*)buffer;
-  if (!check_ident(ehdr->e_ident)) {
+  if (!verify_elf(ehdr)) {
     fprintf(stderr, "invalid header\n");
     return false;
   }
 
-  if (ehdr->e_type != ET_REL) {
-    printf("Not relocatable object\n");
-    return false;
-  }
   if (ehdr->e_machine != EM_X86_64) {
     printf("Not AMD x86-64 arch\n");
     return false;
   }
 
+  char* buffer = (char*)ehdr;
   Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
   Elf64_Shdr* sym_shdr = nullptr;
   for (int secno=0; secno<ehdr->e_shnum; secno++) {
     switch (shdr->sh_type) {
     case SHT_STRTAB:
       {
-	if (secno == ehdr->e_shstrndx)
+	static int strtab_count = 0;
+	if (secno == ehdr->e_shstrndx) {
 	  parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, shstrtab);
-	else
+	} else {
+	  if (strtab_count++ > 0) {
+	    printf("error: more than one string table (not including the\n"
+		   "section header string table) currently supported.\n");
+	    return false;
+	  }
 	  parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, strtab);
+	}
 	break;
       }
     case SHT_SYMTAB:
@@ -140,23 +174,12 @@ bool process_file(void* _vPtr)
   return true;
 }
 
-#if 0
-    switch (shdr->sh_type) {
-    case SHT_SYMTAB: {
-      break;
-    }
-
-#endif
-int main(int argc, char** argv)
+static tuple<void*, size_t> memory_map_file(string& file)
 {
-  if (argc < 2) {
-    printf("usage: %s FILENAME\n", argv[0]);
-    exit(-1);
-  }
+  if (file.size() == 0)
+    return {nullptr, 0};
 
-  init();
-
-  int fd = open(argv[1], O_RDWR);
+  int fd = open(file.c_str(), O_RDWR);
   if (fd < 0) {
     perror("open");
     exit(1);
@@ -167,14 +190,119 @@ int main(int argc, char** argv)
     perror("stat");
     exit(1);
   }
-  printf("size of %s is %ld bytes\n", argv[1], statbuf.st_size);
-  auto elfptr = mmap(NULL, statbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-  if (elfptr == MAP_FAILED) {
+
+  auto ptr = mmap(NULL, statbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (ptr == MAP_FAILED || ptr == nullptr) {
     perror("mmap");
+    return {nullptr, 0};
+  }
+
+  close(fd);
+
+  return {ptr, statbuf.st_size};
+}
+
+Elf64_Ehdr* memory_map_elf_file(string& infile)
+{
+  auto [ptr, _] = memory_map_file(infile);
+  return (Elf64_Ehdr*)ptr;
+}
+/**
+ * If output file is defined, create it and copy the input file to it
+ * and then mmap in the newly created file.  If output file is not
+ * defined just mmap in the input file.  Return an Elf64* pointer to
+ * the mapped file.
+ */
+Elf64_Ehdr* memory_map_elf_file_copy(string& infile, string& outfile)
+{
+  auto [inhdr, size] = memory_map_file(infile);
+  if (!inhdr || outfile.size() == 0) {
+    return (Elf64_Ehdr*)inhdr;
+  }
+
+  int fd = open(outfile.c_str(), O_RDWR|O_CREAT|O_TRUNC, 0644);
+  if (fd < 0) {
+    perror("open");
     exit(1);
   }
-  
-  if (!process_file(elfptr)) {
+
+  // copy input file to output file
+  // just in case:
+  auto bytes_to_write = size;
+  auto inbuf = (char*) inhdr;
+  while (bytes_to_write > 0) {
+    auto bytes_written = write(fd, inhdr, bytes_to_write);
+    if (bytes_written < 0) {
+      perror("write");
+      exit(1);
+    }
+    bytes_to_write -= bytes_written;
+    inbuf += bytes_written;
+  }
+
+  // map in new output file
+  auto ptr = (Elf64_Ehdr*)mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
+  if (ptr == MAP_FAILED || ptr == nullptr) {
+    perror("mmap");
+    return (Elf64_Ehdr*)nullptr;
+  }
+
+  // Input file is no longer needed: close and unmap it.
+  close(fd);
+
+  if (munmap(inhdr, size) < 0) {
+    perror("munmap");
+  }
+
+  return ptr;
+}
+
+void show_symbol_table(Elf64_Ehdr* ehdr)
+{
+  (void)ehdr;
+}
+
+int main(int argc, char** argv)
+{
+  string infile;
+  string outfile;
+  string mockfile;
+  bool list_flag = false;
+  int c;
+  while ((c = getopt(argc, argv, "i:o:m:L")) != -1) {
+    switch (c) {
+    case 'i':
+      infile = optarg;
+      break;
+    case 'o':
+      outfile = optarg;
+      break;
+    case 'm':
+      mockfile = optarg;
+      break;
+    case 'L':
+      list_flag = true;
+      break;
+    default:
+      usage(argv[0]);
+      break;
+    }
+  }
+
+  init_tables();
+
+  Elf64_Ehdr* ehdr = memory_map_elf_file_copy(infile, outfile);
+  Elf64_Ehdr* mock_ehdr = memory_map_elf_file(mockfile);
+
+  if (list_flag) {
+    if (mock_ehdr != nullptr)
+      show_symbol_table(mock_ehdr);
+    else
+      show_symbol_table(ehdr);
+    return 0;
+  }
+
+  if (!process_file(ehdr)) {
     printf("failed\n");
     exit(1);
   }

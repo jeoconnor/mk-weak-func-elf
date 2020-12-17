@@ -3,7 +3,7 @@ source		= elfwalk.cpp
 object		= $(source:.cpp=.o)
 
 LD		= g++
-CPPFLAGS	= -g -Wall -std=gnu++17
+CPPFLAGS	= -ggdb -Wall -std=gnu++17
 LOADLIBES	= -lelf
 
 default: $(target)
