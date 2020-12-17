@@ -337,10 +337,9 @@ int main(int argc, char** argv)
     cout << p->first << " " << p->second << endl;
   }
   cout << ">>> symbol table lookup\n";
-  for_each(symtab_lookup.begin(), symtab_lookup.end(),
-	  [&](auto& p) {
-	    cout << p.first << " " << p.second << endl;
-	  });
+  for (auto p = symtab_lookup.begin(); p != symtab_lookup.end(); p++) {
+    cout << p->first << " " << p->second << endl;
+  }
 
   exit(0);
 }
