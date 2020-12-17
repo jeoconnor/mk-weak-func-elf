@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstring>
+#include <algorithm>
 
 using namespace std;
 
@@ -20,12 +21,19 @@ using TableStrInt = map<string, int>;
 
 // using SymbolTable = Table
 
+// These are used for displaying field names
 map<int, string> stt_name;
 map<int, string> stb_name;
 map<int, string> sht_name;
+
+// symbol string table
 map<int, string> strtab;
+
+// section header string table
 map<int, string> shstrtab;
-map<int, string> symtab;
+
+//map<int, string> symtab;
+// returns an index into the symbol table for the given symbol
 map<string, int> symtab_lookup;
 
 static void usage(const char* name)
@@ -59,6 +67,10 @@ static void init_tables()
 
 static bool verify_elf(Elf64_Ehdr* hdr)
 {
+  if (hdr == nullptr) {
+    printf("error: no file found\n");
+    return false;
+  }
   // Elf header?
   bool ok = (hdr->e_ident[EI_MAG0] == ELFMAG0 &&
 	     hdr->e_ident[EI_MAG1] == ELFMAG1 &&
@@ -90,8 +102,9 @@ Elf64_Sym* find_symbol_entry(Elf64_Sym* buffer, string& name)
   return buffer + idx;
 }
 
-bool parse_symtab(char* buffer, long size, long entsize)
+bool parse_symtab_lookup(char* buffer, long size, long entsize)
 {
+  cout << "** " << __func__ << endl;
   if (entsize != sizeof(Elf64_Sym)) {
     printf("symtab entry invalid size\n");
     return false;
@@ -114,7 +127,7 @@ bool parse_symtab(char* buffer, long size, long entsize)
 
 void parse_strtab(char* buffer, long size, map<int, string>& table)
 {
-  printf("[%s]\n", __func__);
+  cout << "** " << __func__ << endl;
   buffer++;
   size--;
   int npos = 1;
@@ -127,15 +140,54 @@ void parse_strtab(char* buffer, long size, map<int, string>& table)
   }
 }
 
+void create_section_header_string_table(Elf64_Ehdr* ehdr)
+{
+  char* buffer = (char*)ehdr;
+  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+  Elf64_Shdr* shstrhdr = shdr + ehdr->e_shstrndx;
+  if (shstrhdr->sh_type == SHT_STRTAB) {
+    parse_strtab(buffer + shstrhdr->sh_offset, shstrhdr->sh_size, shstrtab);
+  } else {
+    cout << "error: Invalid section header string table: " << shstrhdr->sh_type << endl;
+    return;			// exit or throw
+  }
+}
+
+void create_symbol_table(Elf64_Ehdr* ehdr)
+{
+  char* buffer = (char*)ehdr;
+  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+  for (int secno=0; secno<ehdr->e_shnum; secno++) {
+    switch (shdr->sh_type) {
+    case SHT_SYMTAB:
+      parse_symtab_lookup(buffer+shdr->sh_offset, shdr->sh_size, shdr->sh_entsize);
+      break;
+    default:
+      break;
+    }
+    shdr++;
+  }
+}
+
+void create_symbol_string_table(Elf64_Ehdr* ehdr)
+{
+  char* buffer = (char*)ehdr;
+  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+  for (int secno=0; secno<ehdr->e_shnum; secno++) {
+    switch (shdr->sh_type) {
+    case SHT_STRTAB:
+      if (secno != ehdr->e_shstrndx)
+	parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, strtab);
+      break;
+    default:
+      break;
+    }
+    shdr++;
+  }
+}
+
 bool process_file(Elf64_Ehdr* ehdr)
 {
-  printf("%s\n", __func__);
-
-  if (!verify_elf(ehdr)) {
-    fprintf(stderr, "invalid header\n");
-    return false;
-  }
-
   if (ehdr->e_machine != EM_X86_64) {
     printf("Not AMD x86-64 arch\n");
     return false;
@@ -169,7 +221,7 @@ bool process_file(Elf64_Ehdr* ehdr)
     }
     shdr++;
   }
-  parse_symtab(buffer+sym_shdr->sh_offset, sym_shdr->sh_size,
+  parse_symtab_lookup(buffer+sym_shdr->sh_offset, sym_shdr->sh_size,
 	       sym_shdr->sh_entsize);
   return true;
 }
@@ -292,7 +344,21 @@ int main(int argc, char** argv)
   init_tables();
 
   Elf64_Ehdr* ehdr = memory_map_elf_file_copy(infile, outfile);
+  if (!verify_elf(ehdr)) {
+    cout << "error: invalid elf file " << infile << endl;
+    exit(1);
+  }
+
   Elf64_Ehdr* mock_ehdr = memory_map_elf_file(mockfile);
+  if (mock_ehdr != nullptr && !verify_elf(mock_ehdr)) {
+    cout << "error: invalid elf file " << infile << endl;
+    exit(1);
+  }
+
+
+  create_section_header_string_table(ehdr);
+  create_symbol_string_table(ehdr);
+  create_symbol_table(ehdr);
 
   if (list_flag) {
     if (mock_ehdr != nullptr)
@@ -302,18 +368,23 @@ int main(int argc, char** argv)
     return 0;
   }
 
-  if (!process_file(ehdr)) {
-    printf("failed\n");
-    exit(1);
-  }
-  printf(">>> strtab\n");
+  // if (!process_file(ehdr)) {
+  //   printf("failed\n");
+  //   exit(1);
+  // }
+  printf(">>> symbol string table\n");
   for (auto p = strtab.begin(); p != strtab.end(); p++) {
-    printf("%d %s\n", p->first, p->second.data());
+    cout << p->first << " " << p->second << endl;
   }
-  printf(">>> shstrtab\n");
+  printf(">>> section header symbol table\n");
   for (auto p = shstrtab.begin(); p != shstrtab.end(); p++) {
-    printf("%d %s\n", p->first, p->second.data());
+    cout << p->first << " " << p->second << endl;
   }
+  cout << ">>> symbol table lookup\n";
+  for_each(symtab_lookup.begin(), symtab_lookup.end(),
+	  [&](auto& p) {
+	    cout << p.first << " " << p.second << endl;
+	  });
 
   exit(0);
 }
