@@ -186,46 +186,6 @@ void create_symbol_string_table(Elf64_Ehdr* ehdr)
   }
 }
 
-bool process_file(Elf64_Ehdr* ehdr)
-{
-  if (ehdr->e_machine != EM_X86_64) {
-    printf("Not AMD x86-64 arch\n");
-    return false;
-  }
-
-  char* buffer = (char*)ehdr;
-  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
-  Elf64_Shdr* sym_shdr = nullptr;
-  for (int secno=0; secno<ehdr->e_shnum; secno++) {
-    switch (shdr->sh_type) {
-    case SHT_STRTAB:
-      {
-	static int strtab_count = 0;
-	if (secno == ehdr->e_shstrndx) {
-	  parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, shstrtab);
-	} else {
-	  if (strtab_count++ > 0) {
-	    printf("error: more than one string table (not including the\n"
-		   "section header string table) currently supported.\n");
-	    return false;
-	  }
-	  parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, strtab);
-	}
-	break;
-      }
-    case SHT_SYMTAB:
-      sym_shdr = shdr;
-      break;
-    default:
-      break;
-    }
-    shdr++;
-  }
-  parse_symtab_lookup(buffer+sym_shdr->sh_offset, sym_shdr->sh_size,
-	       sym_shdr->sh_entsize);
-  return true;
-}
-
 static tuple<void*, size_t> memory_map_file(string& file)
 {
   if (file.size() == 0)
@@ -368,10 +328,6 @@ int main(int argc, char** argv)
     return 0;
   }
 
-  // if (!process_file(ehdr)) {
-  //   printf("failed\n");
-  //   exit(1);
-  // }
   printf(">>> symbol string table\n");
   for (auto p = strtab.begin(); p != strtab.end(); p++) {
     cout << p->first << " " << p->second << endl;
