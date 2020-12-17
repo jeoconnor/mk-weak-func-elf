@@ -17,6 +17,7 @@ std::map<int, std::string> sht_name;
 std::map<int, std::string> strtab;
 std::map<int, std::string> shstrtab;
 std::map<int, std::string> symtab;
+std::map<std::string, int> symtab_lookup;
 
 static void init()
 {
@@ -47,6 +48,15 @@ static bool check_ident(unsigned char ident[EI_NIDENT])
 	  ident[EI_MAG3] == ELFMAG3);
 }
 
+Elf64_Sym* find_symbol_entry(char* buffer, std::string& name)
+{
+  int idx = symtab_lookup[name];
+  if (idx == 0)
+    return nullptr;
+
+  return (Elf64_Sym*)(buffer + (idx * sizeof(Elf64_Sym)));
+}
+
 bool parse_symtab(char* buffer, long size, long entsize)
 {
   printf("[%s]\n", __func__);
@@ -58,9 +68,13 @@ bool parse_symtab(char* buffer, long size, long entsize)
   auto symhdr = (Elf64_Sym*)buffer;
   int nelem = size/entsize;
   for (int i=0; i<nelem; i++,symhdr++) {
-    printf("%d %s %s \n", i,
+    if (symhdr->st_name > 0) {
+      symtab_lookup[strtab[symhdr->st_name]] = i;
+    }
+    printf("%d %s %s %s \n", i,
 	   stb_name[ELF64_ST_BIND(symhdr->st_info)].data(),
-	   stt_name[ELF64_ST_TYPE(symhdr->st_info)].data());
+	   stt_name[ELF64_ST_TYPE(symhdr->st_info)].data(),
+	   strtab[symhdr->st_name].data());
     // st_name indexes into the symbol table
   }
   return true;
@@ -102,27 +116,30 @@ bool process_file(void* _vPtr)
   }
 
   Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+  Elf64_Shdr* sym_shdr = nullptr;
   for (int secno=0; secno<ehdr->e_shnum; secno++) {
-    switch (shdr->sh_type) {
-    case SHT_SYMTAB: {
-      parse_symtab(buffer+shdr->sh_offset, shdr->sh_size, shdr->sh_entsize);
-      break;
-    }
-    case SHT_STRTAB: {
+    if (shdr->sh_type == SHT_STRTAB) {
       if (secno == ehdr->e_shstrndx)
 	parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, shstrtab);
       else
 	parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, strtab);
-      break;
-    }
-    default:
-      break;
+    } else if (shdr->sh_type == SHT_SYMTAB) {
+      sym_shdr = shdr;
     }
     shdr++;
   }
+  parse_symtab(buffer+sym_shdr->sh_offset, sym_shdr->sh_size,
+	       sym_shdr->sh_entsize);
   return true;
 }
 
+#if 0
+    switch (shdr->sh_type) {
+    case SHT_SYMTAB: {
+      break;
+    }
+
+#endif
 int main(int argc, char** argv)
 {
   if (argc < 2) {
