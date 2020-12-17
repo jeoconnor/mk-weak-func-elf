@@ -118,13 +118,20 @@ bool process_file(void* _vPtr)
   Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
   Elf64_Shdr* sym_shdr = nullptr;
   for (int secno=0; secno<ehdr->e_shnum; secno++) {
-    if (shdr->sh_type == SHT_STRTAB) {
-      if (secno == ehdr->e_shstrndx)
-	parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, shstrtab);
-      else
-	parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, strtab);
-    } else if (shdr->sh_type == SHT_SYMTAB) {
+    switch (shdr->sh_type) {
+    case SHT_STRTAB:
+      {
+	if (secno == ehdr->e_shstrndx)
+	  parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, shstrtab);
+	else
+	  parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, strtab);
+	break;
+      }
+    case SHT_SYMTAB:
       sym_shdr = shdr;
+      break;
+    default:
+      break;
     }
     shdr++;
   }
