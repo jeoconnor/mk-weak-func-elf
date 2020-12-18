@@ -318,36 +318,44 @@ int main(int argc, char** argv)
     optind++;
   }
 
-  init_tables();
-
-  Elf64_Ehdr* ehdr = memory_map_elf_file_copy(infile, outfile);
-  if (!verify_elf(ehdr)) {
-    cout << "error: invalid elf file " << infile << endl;
-    exit(1);
-  }
-
-  // Elf64_Ehdr* mock_ehdr = memory_map_elf_file(mockfile);
-  // if (mock_ehdr != nullptr && !verify_elf(mock_ehdr)) {
-  //   cout << "error: invalid elf file " << infile << endl;
-  //   exit(1);
-  // }
-
-
-  create_section_header_string_table(ehdr);
-  create_symbol_string_table(ehdr);
-  create_symbol_table(ehdr);
-  // add_any_mock_symbols(mock_ehdr);
-
-  if (list_flag) {
-    // if (mock_ehdr != nullptr)
-    //   show_symbol_table(mock_ehdr);
-    // else
-      show_symbol_table(ehdr);
-    return 0;
-  }
-
   for(auto p = objfiles.begin(); p != objfiles.end(); p++) {
     cout << "p=" << *p << endl;
+  }
+
+  init_tables();
+
+  for(auto p = objfiles.begin(); p != objfiles.end(); p++) {
+    Elf64_Ehdr* ehdr = memory_map_elf_file_copy(*p, outfile);
+    if (!verify_elf(ehdr)) {
+      cout << "error: invalid elf file " << infile << endl;
+      exit(1);
+    }
+    if (outfile.size() > 0) {
+      /* This is a little hoky, but since only one outfile can be
+	 defined at the moment, null it out after first use.
+       */
+      outfile = "";
+    }
+
+    // Elf64_Ehdr* mock_ehdr = memory_map_elf_file(mockfile);
+    // if (mock_ehdr != nullptr && !verify_elf(mock_ehdr)) {
+    //   cout << "error: invalid elf file " << infile << endl;
+    //   exit(1);
+    // }
+
+
+    create_section_header_string_table(ehdr);
+    create_symbol_string_table(ehdr);
+    create_symbol_table(ehdr);
+    // add_any_mock_symbols(mock_ehdr);
+
+    if (list_flag) {
+      // if (mock_ehdr != nullptr)
+      //   show_symbol_table(mock_ehdr);
+      // else
+      show_symbol_table(ehdr);
+      return 0;
+    }
   }
 
   // printf(">>> symbol string table\n");
