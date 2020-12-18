@@ -217,22 +217,23 @@ static tuple<void*, size_t> memory_map_file(string& file)
   return {ptr, statbuf.st_size};
 }
 
-Elf64_Ehdr* memory_map_elf_file(string& infile)
+tuple<Elf64_Ehdr*, size_t> memory_map_elf_file(string& infile)
 {
-  auto [ptr, _] = memory_map_file(infile);
-  return (Elf64_Ehdr*)ptr;
+  auto [ptr, size] =  memory_map_file(infile);
+  return {(Elf64_Ehdr*)ptr, size};
 }
+
 /**
  * If output file is defined, create it and copy the input file to it
  * and then mmap in the newly created file.  If output file is not
  * defined just mmap in the input file.  Return an Elf64* pointer to
  * the mapped file.
  */
-Elf64_Ehdr* memory_map_elf_file_copy(string& infile, string& outfile)
+tuple<Elf64_Ehdr*, size_t> memory_map_elf_file_copy(string& infile, string& outfile)
 {
   auto [inhdr, size] = memory_map_file(infile);
   if (!inhdr || outfile.size() == 0) {
-    return (Elf64_Ehdr*)inhdr;
+    return {(Elf64_Ehdr*)inhdr, size};
   }
 
   int fd = open(outfile.c_str(), O_RDWR|O_CREAT|O_TRUNC, 0644);
@@ -256,10 +257,10 @@ Elf64_Ehdr* memory_map_elf_file_copy(string& infile, string& outfile)
   }
 
   // map in new output file
-  auto ptr = (Elf64_Ehdr*)mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
+  auto ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
   if (ptr == MAP_FAILED || ptr == nullptr) {
     perror("mmap");
-    return (Elf64_Ehdr*)nullptr;
+    return {(Elf64_Ehdr*)nullptr, 0};
   }
 
   // Input file is no longer needed: close and unmap it.
@@ -269,7 +270,7 @@ Elf64_Ehdr* memory_map_elf_file_copy(string& infile, string& outfile)
     perror("munmap");
   }
 
-  return ptr;
+  return {(Elf64_Ehdr*)ptr, size};
 }
 
 void show_symbol_table(Elf64_Ehdr* ehdr)
@@ -324,10 +325,10 @@ int main(int argc, char** argv)
 
   init_tables();
 
-  for(auto p = objfiles.begin(); p != objfiles.end(); p++) {
-    Elf64_Ehdr* ehdr = memory_map_elf_file_copy(*p, outfile);
+  for(auto pFile = objfiles.begin(); pFile != objfiles.end(); pFile++) {
+    auto [ehdr, size] = memory_map_elf_file_copy(*pFile, outfile);
     if (!verify_elf(ehdr)) {
-      cout << "error: invalid elf file " << infile << endl;
+      cout << "error: invalid elf file " << *pFile << endl;
       exit(1);
     }
     if (outfile.size() > 0) {
@@ -355,6 +356,9 @@ int main(int argc, char** argv)
       // else
       show_symbol_table(ehdr);
       return 0;
+    }
+    if (munmap(ehdr, size) != 0) {
+      perror("munmap");
     }
   }
 
