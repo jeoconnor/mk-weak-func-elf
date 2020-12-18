@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <elf.h>
 #include <map>
+#include <vector>
 #include <string>
 #include <tuple>
 #include <sys/types.h>
@@ -38,6 +39,8 @@ map<string, int> symtab_lookup;
 
 static void usage(const char* name)
 {
+  cout << "help...\n"
+       << "more help...\n";
 }
 
 /**
@@ -278,10 +281,14 @@ int main(int argc, char** argv)
 {
   string infile;
   string outfile;
-  string mockfile;
+  vector<string> mockfiles;
+  vector<string> mockfuncs;
+  vector<string> objfiles;
+
   bool list_flag = false;
+
   int c;
-  while ((c = getopt(argc, argv, "i:o:m:L")) != -1) {
+  while ((c = getopt(argc, argv, "i:o:m:f:L")) != -1) {
     switch (c) {
     case 'i':
       infile = optarg;
@@ -290,7 +297,10 @@ int main(int argc, char** argv)
       outfile = optarg;
       break;
     case 'm':
-      mockfile = optarg;
+      mockfiles.push_back(optarg);
+      break;
+    case 'f':
+      mockfuncs.push_back(optarg);
       break;
     case 'L':
       list_flag = true;
@@ -301,6 +311,13 @@ int main(int argc, char** argv)
     }
   }
 
+  if (infile.size() > 0)
+    objfiles.push_back(infile);
+  while (optind < argc) {
+    objfiles.push_back(argv[optind]);
+    optind++;
+  }
+
   init_tables();
 
   Elf64_Ehdr* ehdr = memory_map_elf_file_copy(infile, outfile);
@@ -309,37 +326,42 @@ int main(int argc, char** argv)
     exit(1);
   }
 
-  Elf64_Ehdr* mock_ehdr = memory_map_elf_file(mockfile);
-  if (mock_ehdr != nullptr && !verify_elf(mock_ehdr)) {
-    cout << "error: invalid elf file " << infile << endl;
-    exit(1);
-  }
+  // Elf64_Ehdr* mock_ehdr = memory_map_elf_file(mockfile);
+  // if (mock_ehdr != nullptr && !verify_elf(mock_ehdr)) {
+  //   cout << "error: invalid elf file " << infile << endl;
+  //   exit(1);
+  // }
 
 
   create_section_header_string_table(ehdr);
   create_symbol_string_table(ehdr);
   create_symbol_table(ehdr);
+  // add_any_mock_symbols(mock_ehdr);
 
   if (list_flag) {
-    if (mock_ehdr != nullptr)
-      show_symbol_table(mock_ehdr);
-    else
+    // if (mock_ehdr != nullptr)
+    //   show_symbol_table(mock_ehdr);
+    // else
       show_symbol_table(ehdr);
     return 0;
   }
 
-  printf(">>> symbol string table\n");
-  for (auto p = strtab.begin(); p != strtab.end(); p++) {
-    cout << p->first << " " << p->second << endl;
+  for(auto p = objfiles.begin(); p != objfiles.end(); p++) {
+    cout << "p=" << *p << endl;
   }
-  printf(">>> section header symbol table\n");
-  for (auto p = shstrtab.begin(); p != shstrtab.end(); p++) {
-    cout << p->first << " " << p->second << endl;
-  }
-  cout << ">>> symbol table lookup\n";
-  for (auto p = symtab_lookup.begin(); p != symtab_lookup.end(); p++) {
-    cout << p->first << " " << p->second << endl;
-  }
+
+  // printf(">>> symbol string table\n");
+  // for (auto p = strtab.begin(); p != strtab.end(); p++) {
+  //   cout << p->first << " " << p->second << endl;
+  // }
+  // printf(">>> section header symbol table\n");
+  // for (auto p = shstrtab.begin(); p != shstrtab.end(); p++) {
+  //   cout << p->first << " " << p->second << endl;
+  // }
+  // cout << ">>> symbol table lookup\n";
+  // for (auto p = symtab_lookup.begin(); p != symtab_lookup.end(); p++) {
+  //   cout << p->first << " " << p->second << endl;
+  // }
 
   exit(0);
 }
