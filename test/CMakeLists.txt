@@ -14,3 +14,6 @@ target_link_options(test-cpp-compile PRIVATE "-static")
 add_executable(test-c-compile test-c-compile.c)
 target_link_options(test-c-compile PRIVATE "-static")
 
+add_executable(test-weak-link test-weak-link.c mock-weak-func.c weak-func.c)
+target_link_options(test-weak-link PRIVATE "-static")
+
