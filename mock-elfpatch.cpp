@@ -27,15 +27,17 @@ map<int, string> stt_name;
 map<int, string> stb_name;
 map<int, string> sht_name;
 
-// symbol string table
-map<int, string> strtab;
+  // symbol string table
+  // map<int, string> strtab;
 
-// section header string table
-map<int, string> shstrtab;
+  // // section header string table
+  // map<int, string> shstrtab;
 
-//map<int, string> symtab;
-// returns an index into the symbol table for the given symbol
-map<string, int> symtab_lookup;
+  // //map<int, string> symtab;
+  // // returns an index into the symbol table for the given symbol
+  // map<int, Elf64_Sym*> symtab;
+  // map<string, int> symtab_lookup;
+
 
 static void usage(const char* name)
 {
@@ -98,34 +100,12 @@ static bool verify_elf(Elf64_Ehdr* hdr)
  */
 Elf64_Sym* find_symbol_entry(Elf64_Sym* buffer, string& name)
 {
-  int idx = symtab_lookup[name];
-  if (idx == 0)
-    return nullptr;
+  // int idx = symtab_lookup[name];
+  // if (idx == 0)
+  //   return nullptr;
 
-  return buffer + idx;
-}
-
-bool parse_symtab_lookup(char* buffer, long size, long entsize)
-{
-  cout << "** " << __func__ << endl;
-  if (entsize != sizeof(Elf64_Sym)) {
-    printf("symtab entry invalid size\n");
-    return false;
-  }
-
-  auto symhdr = (Elf64_Sym*)buffer;
-  int nelem = size/entsize;
-  for (int i=0; i<nelem; i++,symhdr++) {
-    if (symhdr->st_name > 0) {
-      symtab_lookup[strtab[symhdr->st_name]] = i;
-    }
-    printf("%d %s %s %s \n", i,
-	   stb_name[ELF64_ST_BIND(symhdr->st_info)].data(),
-	   stt_name[ELF64_ST_TYPE(symhdr->st_info)].data(),
-	   strtab[symhdr->st_name].data());
-    // st_name indexes into the symbol table
-  }
-  return true;
+  // return buffer + idx;
+  return nullptr;
 }
 
 void parse_strtab(char* buffer, long size, map<int, string>& table)
@@ -143,36 +123,73 @@ void parse_strtab(char* buffer, long size, map<int, string>& table)
   }
 }
 
-void create_section_header_string_table(Elf64_Ehdr* ehdr)
+void create_section_header_string_table(Elf64_Ehdr* ehdr, map<int, string>& table)
 {
   char* buffer = (char*)ehdr;
   Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
   Elf64_Shdr* shstrhdr = shdr + ehdr->e_shstrndx;
   if (shstrhdr->sh_type == SHT_STRTAB) {
-    parse_strtab(buffer + shstrhdr->sh_offset, shstrhdr->sh_size, shstrtab);
+    parse_strtab(buffer + shstrhdr->sh_offset, shstrhdr->sh_size, table);
   } else {
     cout << "error: Invalid section header string table: " << shstrhdr->sh_type << endl;
     return;			// exit or throw
   }
 }
 
-void create_symbol_table(Elf64_Ehdr* ehdr)
+void create_symbol_table_extra(Elf64_Ehdr* ehdr, map<int, Elf64_Sym*>& symtab,
+			 map<string, int>& symtab_lookup, map<int, string>& strtab)
 {
   char* buffer = (char*)ehdr;
   Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
-  for (int secno=0; secno<ehdr->e_shnum; secno++) {
-    switch (shdr->sh_type) {
-    case SHT_SYMTAB:
-      parse_symtab_lookup(buffer+shdr->sh_offset, shdr->sh_size, shdr->sh_entsize);
-      break;
-    default:
-      break;
+  for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
+    if (shdr->sh_type == SHT_SYMTAB) {
+      if (shdr->sh_entsize != sizeof(Elf64_Sym)) {
+	cout << "error: sh_entsize and Elf64_Sym different sizes\n";
+	exit(1);
+      }
+      
+      auto symhdr = (Elf64_Sym*)(buffer + shdr->sh_offset);
+      int nsyms = shdr->sh_size / shdr->sh_entsize;
+      for (int n=0; n < nsyms; n++, symhdr++) {
+	if (symhdr->st_name > 0) {
+	  symtab_lookup[strtab[symhdr->st_name]] = n;
+	  symtab[n] = symhdr;
+	}
+	// printf("%d %s %s %s \n", i,`
+	// 	   stb_name[ELF64_ST_BIND(symhdr->st_info)].data(),
+	// 	   stt_name[ELF64_ST_TYPE(symhdr->st_info)].data(),
+	// 	   strtab[symhdr->st_name].data());
+	// st_name indexes into the symbol table
+      }
     }
-    shdr++;
   }
 }
 
-void create_symbol_string_table(Elf64_Ehdr* ehdr)
+void create_symbol_table(Elf64_Ehdr* ehdr, map<string, Elf64_Sym*>& table,
+			 map<int, string>& strtab)
+{
+  char* buffer = (char*)ehdr;
+  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+  for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
+    if (shdr->sh_type == SHT_SYMTAB) {
+      if (shdr->sh_entsize != sizeof(Elf64_Sym)) {
+	cout << "error: sh_entsize and Elf64_Sym different sizes\n";
+	exit(1);
+      }
+      
+      auto symhdr = (Elf64_Sym*)(buffer + shdr->sh_offset);
+      int nsyms = shdr->sh_size / shdr->sh_entsize;
+      for (int n=0; n < nsyms; n++, symhdr++) {
+	if (symhdr->st_name > 0) {
+	  // Should only add if type equals FUNC
+	  table[strtab[symhdr->st_name]] = symhdr;
+	}
+      }
+    }
+  }
+}
+
+void create_symbol_string_table(Elf64_Ehdr* ehdr, map<int, string>& table)
 {
   char* buffer = (char*)ehdr;
   Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
@@ -180,7 +197,7 @@ void create_symbol_string_table(Elf64_Ehdr* ehdr)
     switch (shdr->sh_type) {
     case SHT_STRTAB:
       if (secno != ehdr->e_shstrndx)
-	parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, strtab);
+	parse_strtab(buffer+shdr->sh_offset, shdr->sh_size, table);
       break;
     default:
       break;
@@ -273,9 +290,58 @@ tuple<Elf64_Ehdr*, size_t> memory_map_elf_file_copy(string& infile, string& outf
   return {(Elf64_Ehdr*)ptr, size};
 }
 
-void show_symbol_table(Elf64_Ehdr* ehdr)
+// void show_symbol_table(Elf64_Ehdr* ehdr)
+// {
+//   cout << "*** " << __func__ << endl;
+//   for (auto p = symtab_lookup.begin(); p != symtab_lookup.end(); p++) {
+//     auto symhdr = symtab[p->second];
+//     cout << p->first << " " << " " << strtab[p->second] << " " <<
+//       stb_name[ELF64_ST_BIND(symhdr->st_info)] << " " << 
+//       stt_name[ELF64_ST_TYPE(symhdr->st_info)] << endl;
+//   }
+//   cout << "***\n";
+// }
+
+// void show_function_list_old(Elf64_Ehdr* ehdr, map<int, Elf64_Sym*>& symtab,
+// 			map<string, int>& symtab_lookup)
+// {
+//   cout << "*** " << __func__ << endl;
+//   for (auto p = symtab_lookup.begin(); p != symtab_lookup.end(); p++) {
+//     auto symhdr = symtab[p->second];
+//     if (!symhdr)
+//       continue;
+//     if (ELF64_ST_TYPE(symhdr->st_info) == STT_FUNC) {
+//       cout << p->first << " " << " " << strtab[p->second] << " " <<
+// 	stb_name[ELF64_ST_BIND(symhdr->st_info)] << " " << 
+// 	stt_name[ELF64_ST_TYPE(symhdr->st_info)] << endl;
+//     }
+//   }
+//   cout << "***\n";
+// }
+
+void show_function_list(Elf64_Ehdr* ehdr, map<string, Elf64_Sym*>& table)
 {
-  (void)ehdr;
+  cout << "*** " << __func__ << endl;
+  for (auto p = table.begin(); p != table.end(); p++) {
+    auto symhdr = p->second;
+    if (ELF64_ST_TYPE(symhdr->st_info) == STT_FUNC) {
+      auto symhdr = p->second;
+      cout << p->first << " " << 
+	stb_name[ELF64_ST_BIND(symhdr->st_info)] << " " << 
+	stt_name[ELF64_ST_TYPE(symhdr->st_info)] << endl;
+    }
+  }
+  cout << "***\n";
+}
+
+void build_symbol_table(Elf64_Ehdr* ehdr, map<string, Elf64_Sym*>& table)
+{
+  map<int, string> strtab;
+  map<int, Elf64_Sym*> symtab;
+  map<string, int> symtab_lookup;
+
+  create_symbol_string_table(ehdr, strtab);
+  create_symbol_table(ehdr, table, strtab);
 }
 
 int main(int argc, char** argv)
@@ -326,6 +392,9 @@ int main(int argc, char** argv)
   init_tables();
 
   for(auto pFile = objfiles.begin(); pFile != objfiles.end(); pFile++) {
+    map<string, Elf64_Sym*> symbol_table;
+
+    cout << "> " << *pFile << endl;
     auto [ehdr, size] = memory_map_elf_file_copy(*pFile, outfile);
     if (!verify_elf(ehdr)) {
       cout << "error: invalid elf file " << *pFile << endl;
@@ -345,17 +414,15 @@ int main(int argc, char** argv)
     // }
 
 
-    create_section_header_string_table(ehdr);
-    create_symbol_string_table(ehdr);
-    create_symbol_table(ehdr);
+    // create_section_header_string_table(ehdr, shstrtab);
+    build_symbol_table(ehdr, symbol_table);
     // add_any_mock_symbols(mock_ehdr);
 
     if (list_flag) {
       // if (mock_ehdr != nullptr)
       //   show_symbol_table(mock_ehdr);
       // else
-      show_symbol_table(ehdr);
-      return 0;
+      show_function_list(ehdr, symbol_table);
     }
     if (munmap(ehdr, size) != 0) {
       perror("munmap");
