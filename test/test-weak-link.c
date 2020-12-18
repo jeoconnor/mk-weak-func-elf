@@ -1,4 +1,4 @@
-#include "weak-func.h"
+#include <stdio.h>
 
 void func1();
 
