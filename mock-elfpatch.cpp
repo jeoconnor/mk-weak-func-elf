@@ -27,17 +27,6 @@ map<int, string> stt_name;
 map<int, string> stb_name;
 map<int, string> sht_name;
 
-  // symbol string table
-  // map<int, string> strtab;
-
-  // // section header string table
-  // map<int, string> shstrtab;
-
-  // //map<int, string> symtab;
-  // // returns an index into the symbol table for the given symbol
-  // map<int, Elf64_Sym*> symtab;
-  // map<string, int> symtab_lookup;
-
 
 static void usage(const char* name)
 {
@@ -91,21 +80,6 @@ static bool verify_elf(Elf64_Ehdr* hdr)
   }
 
   return true;
-}
-
-/**
- * Receives a pointer to the start of a Elf64_Sym buffer and the name
- * of a sumbole to find.  If the symbol is found then the return value
- * is a pointer to the Elf64 record in the buffer or NULL;
- */
-Elf64_Sym* find_symbol_entry(Elf64_Sym* buffer, string& name)
-{
-  // int idx = symtab_lookup[name];
-  // if (idx == 0)
-  //   return nullptr;
-
-  // return buffer + idx;
-  return nullptr;
 }
 
 void parse_strtab(char* buffer, long size, map<int, string>& table)
@@ -290,35 +264,6 @@ tuple<Elf64_Ehdr*, size_t> memory_map_elf_file_copy(string& infile, string& outf
   return {(Elf64_Ehdr*)ptr, size};
 }
 
-// void show_symbol_table(Elf64_Ehdr* ehdr)
-// {
-//   cout << "*** " << __func__ << endl;
-//   for (auto p = symtab_lookup.begin(); p != symtab_lookup.end(); p++) {
-//     auto symhdr = symtab[p->second];
-//     cout << p->first << " " << " " << strtab[p->second] << " " <<
-//       stb_name[ELF64_ST_BIND(symhdr->st_info)] << " " << 
-//       stt_name[ELF64_ST_TYPE(symhdr->st_info)] << endl;
-//   }
-//   cout << "***\n";
-// }
-
-// void show_function_list_old(Elf64_Ehdr* ehdr, map<int, Elf64_Sym*>& symtab,
-// 			map<string, int>& symtab_lookup)
-// {
-//   cout << "*** " << __func__ << endl;
-//   for (auto p = symtab_lookup.begin(); p != symtab_lookup.end(); p++) {
-//     auto symhdr = symtab[p->second];
-//     if (!symhdr)
-//       continue;
-//     if (ELF64_ST_TYPE(symhdr->st_info) == STT_FUNC) {
-//       cout << p->first << " " << " " << strtab[p->second] << " " <<
-// 	stb_name[ELF64_ST_BIND(symhdr->st_info)] << " " << 
-// 	stt_name[ELF64_ST_TYPE(symhdr->st_info)] << endl;
-//     }
-//   }
-//   cout << "***\n";
-// }
-
 void show_function_list(Elf64_Ehdr* ehdr, map<string, Elf64_Sym*>& table)
 {
   cout << "*** " << __func__ << endl;
@@ -411,13 +356,6 @@ int main(int argc, char** argv)
       outfile = "";
     }
 
-    // Elf64_Ehdr* mock_ehdr = memory_map_elf_file(mockfile);
-    // if (mock_ehdr != nullptr && !verify_elf(mock_ehdr)) {
-    //   cout << "error: invalid elf file " << infile << endl;
-    //   exit(1);
-    // }
-
-
     // create_section_header_string_table(ehdr, shstrtab);
     build_symbol_table(ehdr, symbol_table);
     // add_any_mock_symbols(mock_ehdr);
@@ -449,19 +387,6 @@ int main(int argc, char** argv)
       perror("munmap");
     }
   }
-
-  // printf(">>> symbol string table\n");
-  // for (auto p = strtab.begin(); p != strtab.end(); p++) {
-  //   cout << p->first << " " << p->second << endl;
-  // }
-  // printf(">>> section header symbol table\n");
-  // for (auto p = shstrtab.begin(); p != shstrtab.end(); p++) {
-  //   cout << p->first << " " << p->second << endl;
-  // }
-  // cout << ">>> symbol table lookup\n";
-  // for (auto p = symtab_lookup.begin(); p != symtab_lookup.end(); p++) {
-  //   cout << p->first << " " << p->second << endl;
-  // }
 
   exit(0);
 }
