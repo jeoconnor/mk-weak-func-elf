@@ -223,7 +223,7 @@ static tuple<void*, size_t> memory_map_file(string& file)
     exit(1);
   }
 
-  auto ptr = mmap(NULL, statbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  auto ptr = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
   if (ptr == MAP_FAILED || ptr == nullptr) {
     perror("mmap");
     return {nullptr, 0};
@@ -274,7 +274,7 @@ tuple<Elf64_Ehdr*, size_t> memory_map_elf_file_copy(string& infile, string& outf
   }
 
   // map in new output file
-  auto ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
+  auto ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
   if (ptr == MAP_FAILED || ptr == nullptr) {
     perror("mmap");
     return {(Elf64_Ehdr*)nullptr, 0};
@@ -353,9 +353,10 @@ int main(int argc, char** argv)
   vector<string> objfiles;
 
   bool list_flag = false;
+  bool weak_flag = false;	// This is the point but require explicit request
 
   int c;
-  while ((c = getopt(argc, argv, "i:o:m:f:L")) != -1) {
+  while ((c = getopt(argc, argv, "i:o:m:f:LW")) != -1) {
     switch (c) {
     case 'i':
       infile = optarg;
@@ -371,6 +372,9 @@ int main(int argc, char** argv)
       break;
     case 'L':
       list_flag = true;
+      break;
+    case 'W':
+      weak_flag = true;
       break;
     default:
       usage(argv[0]);
@@ -424,6 +428,23 @@ int main(int argc, char** argv)
       // else
       show_function_list(ehdr, symbol_table);
     }
+
+    if (weak_flag) {
+      for (auto p = mockfuncs.begin(); p < mockfuncs.end(); p++) {
+	cout << "patching " << *p << endl;
+	auto shdr = symbol_table[*p];
+	if (shdr) {
+	  // printf("st_info 0x%08x\n", shdr->st_info);
+	  shdr->st_info = ELF64_ST_INFO(STB_WEAK, ELF64_ST_TYPE(shdr->st_info));
+	  // printf("st_info 0x%08x\n", shdr->st_info);
+	}
+      }
+
+      if (msync(ehdr, size, MS_SYNC) != 0) {
+	perror("msync");
+      }
+    }
+
     if (munmap(ehdr, size) != 0) {
       perror("munmap");
     }
