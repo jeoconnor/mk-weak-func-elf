@@ -174,7 +174,7 @@ void create_symbol_table(Elf64_Ehdr* ehdr, map<string, Elf64_Sym*>& table,
       auto symhdr = (Elf64_Sym*)(buffer + shdr->sh_offset);
       int nsyms = shdr->sh_size / shdr->sh_entsize;
       for (int n=0; n < nsyms; n++, symhdr++) {
-	if (symhdr->st_name > 0) {
+	if (symhdr->st_name > 0 && ELF64_ST_TYPE(symhdr->st_info) == STT_FUNC) {
 	  // Should only add if type equals FUNC
 	  table[strtab[symhdr->st_name]] = symhdr;
 	}
