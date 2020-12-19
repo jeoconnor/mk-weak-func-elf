@@ -59,6 +59,26 @@ static void init_tables()
   stb_name[STB_WEAK]      = "WEAK";
 }
 
+void get_last_directory_segment(string& s, const char delim, string& last_seg)
+{
+  int n = 0;
+  int npos = n;
+  for (auto p = s.begin(); p != s.end(); p++, n++) {
+    if (*p == delim)
+      npos = n;
+  }
+  if (npos > 0)
+    npos++;
+  last_seg = s.substr(npos);
+}
+
+bool file_has_mock_prefix(string& filename, string& prefix)
+{
+  string dirname;
+  get_last_directory_segment(filename, '/', dirname);
+  return (prefix == dirname.substr(0, prefix.size()));
+}
+
 static bool verify_elf(Elf64_Ehdr* hdr)
 {
   if (hdr == nullptr) {
@@ -297,6 +317,8 @@ int main(int argc, char** argv)
   vector<string> mockfuncs;
   vector<string> objfiles;
 
+  string mock_prefix("mock");
+
   bool list_flag = false;
   bool weak_flag = false;	// This is the point but require explicit request
 
@@ -329,8 +351,13 @@ int main(int argc, char** argv)
 
   if (infile.size() > 0)
     objfiles.push_back(infile);
+
   while (optind < argc) {
-    objfiles.push_back(argv[optind]);
+    string s = argv[optind];
+    if (file_has_mock_prefix(s, mock_prefix))
+      mockfiles.push_back(s);
+    else
+      objfiles.push_back(s);
     optind++;
   }
 
@@ -340,6 +367,32 @@ int main(int argc, char** argv)
 
   init_tables();
 
+  /*
+   * First build up a list of function names we want to superceed from
+   * the list of mock files.
+   */
+  map<string, Elf64_Sym*> mock_symtab;
+  for (auto pFile = mockfiles.begin(); pFile != mockfiles.end(); pFile++) {
+    auto [ehdr, size] = memory_map_elf_file(*pFile);
+    if (!verify_elf(ehdr)) {
+      cout << "error: invalid elf file " << *pFile << endl;
+      exit(1);
+    }
+
+    build_symbol_table(ehdr, mock_symtab);
+    for (auto p = mock_symtab.begin(); p != mock_symtab.end(); p++) {
+      mockfuncs.push_back(p->first);
+    }
+    if (munmap(ehdr, size) != 0) {
+      perror("munmap");
+    }
+  }
+  mock_symtab.erase(mock_symtab.begin(), mock_symtab.end());
+
+  for(auto p = mockfuncs.begin(); p != mockfuncs.end(); p++) {
+    cout << *p << endl;
+  }
+  
   for(auto pFile = objfiles.begin(); pFile != objfiles.end(); pFile++) {
     map<string, Elf64_Sym*> symbol_table;
 
