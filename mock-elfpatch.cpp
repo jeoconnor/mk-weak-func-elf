@@ -27,6 +27,7 @@ map<int, string> stt_name;
 map<int, string> stb_name;
 map<int, string> sht_name;
 
+bool extract_mock_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string& secname);
 
 static void usage(const char* name)
 {
@@ -102,6 +103,7 @@ static bool verify_elf(Elf64_Ehdr* hdr)
   return true;
 }
 
+// XXX BUGGY
 void parse_strtab(char* buffer, long size, map<int, string>& table)
 {
   cout << "** " << __func__ << endl;
@@ -109,24 +111,45 @@ void parse_strtab(char* buffer, long size, map<int, string>& table)
   size--;
   int npos = 1;
   while (size > 0) {
+    cout << "x: " << npos << ", " << buffer << endl;
     table[npos] = buffer;
     int n = table[npos].size() + 1;
     npos += n;
     size -= n;
     buffer += n;
   }
+
+  cout << __func__ << ":\n";
+  for (auto p=table.begin(); p!=table.end(); p++) {
+    cout << " " << p->first << " " << p->second << endl;
+  }
 }
 
-void create_section_header_string_table(Elf64_Ehdr* ehdr, map<int, string>& table)
+void create_section_name_index_table(Elf64_Ehdr* ehdr, map<string, int>& table)
 {
   char* buffer = (char*)ehdr;
   Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
   Elf64_Shdr* shstrhdr = shdr + ehdr->e_shstrndx;
-  if (shstrhdr->sh_type == SHT_STRTAB) {
-    parse_strtab(buffer + shstrhdr->sh_offset, shstrhdr->sh_size, table);
-  } else {
-    cout << "error: Invalid section header string table: " << shstrhdr->sh_type << endl;
-    return;			// exit or throw
+
+  // // create a mapping between section name and offset into string buffer
+  // map<string, int> shmap;
+
+  // char* strbuf = buffer + shstrhdr->sh_offset + 1;
+  // int strbufsize = shstrhdr->sh_size - 1;
+  // int npos = 1;
+  // while (strbufsize > 0) {
+  //   shmap[string] = npos;
+  //   int step = shmap[npos].size() + 1;
+  //   npos += step;
+  //   strbufsize -= step;
+  //   strbuf += step;
+  // }
+
+  // 
+  char* strbuf = buffer + shstrhdr->sh_offset;
+  for (int shidx = 0; shidx < ehdr->e_shnum; shidx++, shdr++) {
+    char* name = strbuf + shdr->sh_name;
+    table[name] = shidx;
   }
 }
 
@@ -145,6 +168,9 @@ void create_symbol_table_extra(Elf64_Ehdr* ehdr, map<int, Elf64_Sym*>& symtab,
       auto symhdr = (Elf64_Sym*)(buffer + shdr->sh_offset);
       int nsyms = shdr->sh_size / shdr->sh_entsize;
       for (int n=0; n < nsyms; n++, symhdr++) {
+	if (n == 12) {
+	  printf("??? symhdr->st_name=%d\n", symhdr->st_name);
+	}
 	if (symhdr->st_name > 0) {
 	  symtab_lookup[strtab[symhdr->st_name]] = n;
 	  symtab[n] = symhdr;
@@ -174,6 +200,9 @@ void create_symbol_table(Elf64_Ehdr* ehdr, map<string, Elf64_Sym*>& table,
       auto symhdr = (Elf64_Sym*)(buffer + shdr->sh_offset);
       int nsyms = shdr->sh_size / shdr->sh_entsize;
       for (int n=0; n < nsyms; n++, symhdr++) {
+	if (n == 12) {
+	  printf("??? symhdr->st_name=%d\n", symhdr->st_name);
+	}
 	if (symhdr->st_name > 0 && ELF64_ST_TYPE(symhdr->st_info) == STT_FUNC) {
 	  // Should only add if type equals FUNC
 	  table[strtab[symhdr->st_name]] = symhdr;
@@ -247,16 +276,16 @@ bool is_mockfile(string& file, string& section_name)
   int bufsize = shstrhdr->sh_size;
   buffer++;
   bufsize--;
-  cout << "looking for: " << section_name << endl;
+  // cout << "looking for: " << section_name << endl;
   while (bufsize > 0) {
-    cout << "  " << buffer << endl;
-    if (section_name == buffer) {
+    // cout << "  " << buffer << endl;
+    if (section_name == string(buffer)) {
       found = true;
       break;
     }
-    // size = strlen(buffer) + 1;
-    // bufsize -= size;
-    // buffer += size;
+    int size = strlen(buffer) + 1;
+    bufsize -= size;
+    buffer += size;
   }
 
   if (munmap(ehdr, filesize) < 0) {
@@ -275,7 +304,7 @@ bool is_mockfile(string& file, string& section_name)
 tuple<Elf64_Ehdr*, size_t> memory_map_elf_file_copy(string& infile, string& outfile)
 {
   auto [inhdr, size] = memory_map_file(infile);
-  if (!inhdr || outfile.size() == 0) {
+  if (!inhdr || infile == outfile) {
     return {(Elf64_Ehdr*)inhdr, size};
   }
 
@@ -341,29 +370,83 @@ void build_symbol_table(Elf64_Ehdr* ehdr, map<string, Elf64_Sym*>& table)
   create_symbol_table(ehdr, table, strtab);
 }
 
+bool extract_mock_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string& secname)
+{
+  bool found = false;
+
+  // Section header
+  if (!ehdr->e_shoff) {
+    cout << "error: unable to find section header table\n";
+    return false;
+  }
+
+  char* elfbuf = (char*)ehdr;
+  
+  Elf64_Sym* symhdr = nullptr;	// symbol table
+
+  char* shstrbuf = nullptr;	// section header string buffer
+  char* strbuf = nullptr;	// symbol name string buffer
+
+  int numsyms = 0;
+  Elf64_Shdr* shdr = (Elf64_Shdr*)(elfbuf + ehdr->e_shoff);
+  for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
+    if (shdr->sh_type == SHT_STRTAB) {
+      if (secno == ehdr->e_shstrndx)
+	shstrbuf = elfbuf + shdr->sh_offset;
+      else
+	strbuf = elfbuf + shdr->sh_offset;
+    } else if (shdr->sh_type == SHT_SYMTAB) {
+      symhdr = (Elf64_Sym*)(elfbuf + shdr->sh_offset);
+      numsyms = shdr->sh_size / shdr->sh_entsize;
+    }
+  }
+
+  int mock_index = 0;
+
+  // Find section index for mock section
+  shdr = (Elf64_Shdr*)(elfbuf + ehdr->e_shoff);
+  for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
+    if (shdr->sh_name != 0) {
+      if (secname == shstrbuf + shdr->sh_name) {
+	mock_index = secno;
+	found = true;
+	break;
+      }
+    }
+  }
+
+  for (int n=0; n < numsyms; n++, symhdr++) {
+    // looking for symbols pointing to the mock section index
+    if (symhdr->st_shndx == mock_index) {
+      if (symhdr->st_name > 0 && ELF64_ST_TYPE(symhdr->st_info) == STT_FUNC) {
+	string name = strbuf + symhdr->st_name;
+	mockfuncs.push_back(name);
+      }
+    }
+  }
+
+  return found;
+}
+
+  vector<string> mockfuncs;	// use unordered_set?
+
 int main(int argc, char** argv)
 {
   string infile;
-  string outfile;
   vector<string> mockfiles;
-  vector<string> mockfuncs;
+  vector<string> nonmockfiles;
   vector<string> objfiles;
 
   string mock_prefix("mock");
-  string section_name(".mock");
+  string section_name(".mock");\
+  string file_suffix("");
 
   bool list_flag = false;
   bool weak_flag = false;	// This is the point but require explicit request
 
   int c;
-  while ((c = getopt(argc, argv, "i:o:m:f:LW")) != -1) {
+  while ((c = getopt(argc, argv, "m:f:LW")) != -1) {
     switch (c) {
-    case 'i':
-      infile = optarg;
-      break;
-    case 'o':
-      outfile = optarg;
-      break;
     case 'm':
       mockfiles.push_back(optarg);
       break;
@@ -395,9 +478,6 @@ int main(int argc, char** argv)
     };
   }
 #endif
-  if (infile.size() > 0)
-    objfiles.push_back(infile);
-
   while (optind < argc) {
     string s = argv[optind];
     if (file_has_mock_prefix(s, mock_prefix))
@@ -407,32 +487,49 @@ int main(int argc, char** argv)
     optind++;
   }
 
-  vector<string> nonmockfiles;
-  for(auto p = objfiles.begin(); p != objfiles.end(); p++) {
-    cout << "p=" << *p << endl;
-    if (is_mockfile(*p, section_name)) {
-      mockfiles.push_back(*p);
-    } else {
-      nonmockfiles.push_back(*p);
-    }
-  }
-  objfiles.erase(objfiles.begin(), objfiles.end());
+  // vector<string> nonmockfiles;
+  // for(auto p = objfiles.begin(); p != objfiles.end(); p++) {
+  //   cout << "p=" << *p << endl;
+  //   if (is_mockfile(*p, section_name)) {
+  //     mockfiles.push_back(*p);
+  //   } else {
+  //     nonmockfiles.push_back(*p);
+  //   }
+  // }
+  // objfiles.erase(objfiles.begin(), objfiles.end());
 
   init_tables();
 
+  // for (auto pFile = nonmockfiles.begin(); pFile != nonmockfiles.end(); p++) {
+  //   auto [ehdr, size] = memory_map_elf_file(*pFile);
+  //   if (!verify_elf(ehdr)) {
+  //     cout << "error: invalid elf file " << *pFile << endl;
+  //     exit(1);
+  //   }
+
+  // }
+
   /*
    * First build up a list of function names we want to superceed from
-   * the list of mock files.
+   * the list of mock files.  These are files that were explicitly
+   * identified as providing replacement functions.
    */
-  map<string, Elf64_Sym*> mock_symtab;
   for (auto pFile = mockfiles.begin(); pFile != mockfiles.end(); pFile++) {
     auto [ehdr, size] = memory_map_elf_file(*pFile);
     if (!verify_elf(ehdr)) {
       cout << "error: invalid elf file " << *pFile << endl;
       exit(1);
     }
-
+    cout << "file: " << *pFile << endl;
+    // map<string, int> shidx_table;
+    // create_section_name_index_table(ehdr, shidx_table);
+    // for (auto p = shidx_table.begin(); p != shidx_table.end(); p++) {
+    //   cout << "XXX " << p->first << " " << p->second << endl;
+    // }
+    
+    map<string, Elf64_Sym*> mock_symtab;
     build_symbol_table(ehdr, mock_symtab);
+
     for (auto p = mock_symtab.begin(); p != mock_symtab.end(); p++) {
       mockfuncs.push_back(p->first);
     }
@@ -440,34 +537,56 @@ int main(int argc, char** argv)
     if (munmap(ehdr, size) != 0) {
       perror("munmap");
     }
+
+    mock_symtab.erase(mock_symtab.begin(), mock_symtab.end());
   }
-  // I don't know of this matters
-  mock_symtab.erase(mock_symtab.begin(), mock_symtab.end());
 
   // See what we got
   for(auto p = mockfuncs.begin(); p != mockfuncs.end(); p++) {
-    cout << *p << endl;
+    cout << "  function name = " << *p << endl;
   }
-  
+
+  /*
+   * Identify object files with a ".mock" section and add .mock
+   * attribute labeled functions to the list of mock functions.
+   * Separate the files into mock and non-mock lists.
+   */
+  for(auto pFile = objfiles.begin(); pFile != objfiles.end(); pFile++) {
+    auto [ehdr, size] = memory_map_elf_file(*pFile);
+    if (!verify_elf(ehdr)) {
+      cout << "error: invalid elf file " << *pFile << endl;
+      exit(1);
+    }
+    cout << "file: " << *pFile << endl;
+
+    if (extract_mock_function_names(ehdr, mockfuncs, section_name)) {
+      mockfiles.push_back(*pFile);
+    } else {
+      nonmockfiles.push_back(*pFile);
+    }
+  }
+
+  /*
+   * The non-mock files are the ones to modify
+   */
   for(auto pFile = nonmockfiles.begin(); pFile != nonmockfiles.end(); pFile++) {
     map<string, Elf64_Sym*> symbol_table;
 
     cout << "> " << *pFile << endl;
+    string outfile = *pFile + file_suffix;
     auto [ehdr, size] = memory_map_elf_file_copy(*pFile, outfile);
     if (!verify_elf(ehdr)) {
       cout << "error: invalid elf file " << *pFile << endl;
       exit(1);
     }
-    if (outfile.size() > 0) {
-      /* This is a little hoky, but since only one outfile can be
-	 defined at the moment, null it out after first use.
-       */
-      outfile = "";
-    }
-
     // create_section_header_string_table(ehdr, shstrtab);
     build_symbol_table(ehdr, symbol_table);
     // add_any_mock_symbols(mock_ehdr);
+
+    cout << "Symbol Table:\n"; 
+    for (auto p=symbol_table.begin(); p!=symbol_table.end(); p++) {
+      cout << "  " << p->first << endl;
+    }
 
     if (list_flag) {
       // if (mock_ehdr != nullptr)
@@ -481,9 +600,11 @@ int main(int argc, char** argv)
 	cout << "patching " << *p << endl;
 	auto shdr = symbol_table[*p];
 	if (shdr) {
-	  // printf("st_info 0x%08x\n", shdr->st_info);
+	  printf("st_info 0x%08x\n", shdr->st_info);
 	  shdr->st_info = ELF64_ST_INFO(STB_WEAK, ELF64_ST_TYPE(shdr->st_info));
-	  // printf("st_info 0x%08x\n", shdr->st_info);
+	  printf("st_info 0x%08x\n", shdr->st_info);
+	} else {
+	  cout << "symbol table: " << *p << " not found\n"; 
 	}
       }
 
