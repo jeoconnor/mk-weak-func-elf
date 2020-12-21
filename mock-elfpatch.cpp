@@ -234,6 +234,38 @@ tuple<Elf64_Ehdr*, size_t> memory_map_elf_file(string& infile)
   return {(Elf64_Ehdr*)ptr, size};
 }
 
+bool is_mockfile(string& file, string& section_name)
+{
+  bool found = false;
+  auto [ehdr, filesize] = memory_map_elf_file(file);
+  if (!ehdr)
+    return found;
+  char* ptr = (char*)ehdr;
+  Elf64_Shdr* shdr = (Elf64_Shdr*)(ptr + ehdr->e_shoff);
+  Elf64_Shdr* shstrhdr = shdr + ehdr->e_shstrndx;
+  char* buffer = ptr + shstrhdr->sh_offset;
+  int bufsize = shstrhdr->sh_size;
+  buffer++;
+  bufsize--;
+  cout << "looking for: " << section_name << endl;
+  while (bufsize > 0) {
+    cout << "  " << buffer << endl;
+    if (section_name == buffer) {
+      found = true;
+      break;
+    }
+    // size = strlen(buffer) + 1;
+    // bufsize -= size;
+    // buffer += size;
+  }
+
+  if (munmap(ehdr, filesize) < 0) {
+    perror("munmap");
+  }
+
+  return found;
+}
+
 /**
  * If output file is defined, create it and copy the input file to it
  * and then mmap in the newly created file.  If output file is not
@@ -318,6 +350,7 @@ int main(int argc, char** argv)
   vector<string> objfiles;
 
   string mock_prefix("mock");
+  string section_name(".mock");
 
   bool list_flag = false;
   bool weak_flag = false;	// This is the point but require explicit request
@@ -348,7 +381,20 @@ int main(int argc, char** argv)
       break;
     }
   }
-
+#if 0
+  while (true) {
+    int this_option_optind = optind ? optind : 1;
+    int option_index = 0;
+    static struct option long_options[] = {
+        {"input-file",    required_argument, 0, 'i'},
+        {"output-file",   required_argument, 0, 'o'},
+        {"mock-file",     required_argument, 0, 'm'},
+        {"function-name", required_argument, 0, 'f'},
+        {"write-flag",    no_argument,       0, 'W'},
+	{0,               0,                 0,  0 }
+    };
+  }
+#endif
   if (infile.size() > 0)
     objfiles.push_back(infile);
 
@@ -361,9 +407,16 @@ int main(int argc, char** argv)
     optind++;
   }
 
+  vector<string> nonmockfiles;
   for(auto p = objfiles.begin(); p != objfiles.end(); p++) {
     cout << "p=" << *p << endl;
+    if (is_mockfile(*p, section_name)) {
+      mockfiles.push_back(*p);
+    } else {
+      nonmockfiles.push_back(*p);
+    }
   }
+  objfiles.erase(objfiles.begin(), objfiles.end());
 
   init_tables();
 
@@ -383,17 +436,20 @@ int main(int argc, char** argv)
     for (auto p = mock_symtab.begin(); p != mock_symtab.end(); p++) {
       mockfuncs.push_back(p->first);
     }
+    // Done with the file, unmap it
     if (munmap(ehdr, size) != 0) {
       perror("munmap");
     }
   }
+  // I don't know of this matters
   mock_symtab.erase(mock_symtab.begin(), mock_symtab.end());
 
+  // See what we got
   for(auto p = mockfuncs.begin(); p != mockfuncs.end(); p++) {
     cout << *p << endl;
   }
   
-  for(auto pFile = objfiles.begin(); pFile != objfiles.end(); pFile++) {
+  for(auto pFile = nonmockfiles.begin(); pFile != nonmockfiles.end(); pFile++) {
     map<string, Elf64_Sym*> symbol_table;
 
     cout << "> " << *pFile << endl;
