@@ -4,35 +4,39 @@ failures	= test-single-func-fail
 
 SECTION		= .mock
 
-CPPFLAGS	= -DMOCK_LABEL=$(SECTION)
+PRELINK		= ../mock-elfpatch -W
 
 all:
-	for x in $(targets); do \
-	    $(MAKE) clean ;\
-	    $(MAKE) $$x ;\
+	@for x in $(targets); do \
+	    echo "*** Start $$x ***" ;\
+	    $(MAKE) -f $(MAKEFILE_LIST) clean ;\
+	    $(MAKE) -f $(MAKEFILE_LIST) $$x ;\
 	    echo "executing $$x" ; ./$$x && echo PASS || echo FAIL ;\
 	done
 
 test-link: test-single-func.o func.o
-	$(LINK.c) $^ -o $@
+	@$(LINK.c) $^ -o $@
 
 
 test-single-func: test-single-func.o mock-func.o func.o
-	../mock-elfpatch -W -m mock-func.o func.o
-	$(LINK.c) $^ -o $@
+	${PRELINK} -m mock-func.o func.o
+	@$(LINK.c) $^ -o $@
 
 test-multi-func: test-multi-func.o mock-func.o func.o
-	../mock-elfpatch -W -m mock-func.o func.o
-	$(LINK.c) $^ -o $@
+	${PRELINK} -m mock-func.o func.o
+	@$(LINK.c) $^ -o $@
 
 test-section-func: LDFLAGS=-Xlinker --unique=$(SECTION)
 test-section-func: test-multi-func.o func-section.o func.o
-	../mock-elfpatch -W $^
-	$(LINK.c) $^ -o $@
+	${PRELINK} $^
+	@$(LINK.c) $^ -o $@
+
+func-section.o: CFLAGS += -DCUSTOM_SECTION=$(SECTION)
 
 clean:
-	rm -f $(targets) *.o
+	@rm -f $(targets) *.o
 
+# will fail to compile
 test-single-func-fail: test-single-func.o mock-func.o func.o
-	$(LINK.c) $^ -o $@
+	@$(LINK.c) $^ -o $@
 

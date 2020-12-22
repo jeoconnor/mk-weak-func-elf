@@ -1,14 +1,14 @@
 #include <stdio.h>
 
-#ifdef MOCK_LABEL
+#ifdef CUSTOM_SECTION
 #define stringify(x) _str(x)
 #define _str(x)      #x
-#define MOCK_SECTION __attribute__((section(stringify(MOCK_LABEL))))
+#define SECTION_ATTRIBUTE __attribute__((section(stringify(CUSTOM_SECTION))))
 #else
-#define MOCK_SECTION 
+#define SECTION _ATTRIBUTE
 #endif
 
-void func() MOCK_SECTION;
+void func() SECTION_ATTRIBUTE;
 
 void func()
 {
