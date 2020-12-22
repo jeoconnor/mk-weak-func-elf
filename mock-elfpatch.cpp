@@ -27,6 +27,7 @@ map<int, string> stt_name;
 map<int, string> stb_name;
 map<int, string> sht_name;
 
+bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string& secname);
 static tuple<void*, size_t> memory_map_file(string& file);
 static bool verify_elf(Elf64_Ehdr* hdr);
 
@@ -70,8 +71,6 @@ public:
   Elf64_Ehdr* ehdr;
 
 };
-
-bool extract_mock_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string& secname);
 
 static void usage(const char* name)
 {
@@ -190,6 +189,7 @@ static bool verify_elf(Elf64_Ehdr* hdr)
   return true;
 }
 
+#if 0
 // XXX BUGGY
 void parse_strtab(char* buffer, long size, map<int, string>& table)
 {
@@ -218,57 +218,10 @@ void create_section_name_index_table(Elf64_Ehdr* ehdr, map<string, int>& table)
   Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
   Elf64_Shdr* shstrhdr = shdr + ehdr->e_shstrndx;
 
-  // // create a mapping between section name and offset into string buffer
-  // map<string, int> shmap;
-
-  // char* strbuf = buffer + shstrhdr->sh_offset + 1;
-  // int strbufsize = shstrhdr->sh_size - 1;
-  // int npos = 1;
-  // while (strbufsize > 0) {
-  //   shmap[string] = npos;
-  //   int step = shmap[npos].size() + 1;
-  //   npos += step;
-  //   strbufsize -= step;
-  //   strbuf += step;
-  // }
-
-  // 
   char* strbuf = buffer + shstrhdr->sh_offset;
   for (int shidx = 0; shidx < ehdr->e_shnum; shidx++, shdr++) {
     char* name = strbuf + shdr->sh_name;
     table[name] = shidx;
-  }
-}
-
-void create_symbol_table_extra(Elf64_Ehdr* ehdr, map<int, Elf64_Sym*>& symtab,
-			 map<string, int>& symtab_lookup, map<int, string>& strtab)
-{
-  char* buffer = (char*)ehdr;
-  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
-  for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
-    if (shdr->sh_type == SHT_SYMTAB) {
-      if (shdr->sh_entsize != sizeof(Elf64_Sym)) {
-	cout << "error: sh_entsize and Elf64_Sym different sizes\n";
-	exit(1);
-      }
-      
-      auto symhdr = (Elf64_Sym*)(buffer + shdr->sh_offset);
-      int nsyms = shdr->sh_size / shdr->sh_entsize;
-      for (int n=0; n < nsyms; n++, symhdr++) {
-	if (n == 12) {
-	  printf("??? symhdr->st_name=%d\n", symhdr->st_name);
-	}
-	if (symhdr->st_name > 0) {
-	  symtab_lookup[strtab[symhdr->st_name]] = n;
-	  symtab[n] = symhdr;
-	}
-	// printf("%d %s %s %s \n", i,`
-	// 	   stb_name[ELF64_ST_BIND(symhdr->st_info)].data(),
-	// 	   stt_name[ELF64_ST_TYPE(symhdr->st_info)].data(),
-	// 	   strtab[symhdr->st_name].data());
-	// st_name indexes into the symbol table
-      }
-    }
   }
 }
 
@@ -315,7 +268,7 @@ void create_symbol_string_table(Elf64_Ehdr* ehdr, map<int, string>& table)
     shdr++;
   }
 }
-
+#endif
 static tuple<void*, size_t> memory_map_file(string& file)
 {
   if (file.size() == 0)
@@ -350,6 +303,7 @@ tuple<Elf64_Ehdr*, size_t> memory_map_elf_file(string& infile)
   return {(Elf64_Ehdr*)ptr, size};
 }
 
+#if 0
 bool is_mockfile(string& file, string& section_name)
 {
   bool found = false;
@@ -456,10 +410,13 @@ void build_symbol_table(Elf64_Ehdr* ehdr, map<string, Elf64_Sym*>& table)
   create_symbol_string_table(ehdr, strtab);
   create_symbol_table(ehdr, table, strtab);
 }
+#endif
 
-bool extract_mock_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string& secname)
+bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string& secname)
 {
   bool found = false;
+
+  int initial_function_number = mockfuncs.size();
 
   // Section header
   if (!ehdr->e_shoff) {
@@ -490,32 +447,44 @@ bool extract_mock_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, st
 
   int mock_index = 0;
 
-  // Find section index for mock section
-  shdr = (Elf64_Shdr*)(elfbuf + ehdr->e_shoff);
-  for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
-    if (shdr->sh_name != 0) {
-      if (secname == shstrbuf + shdr->sh_name) {
-	mock_index = secno;
-	found = true;
-	break;
+  if (secname.size() > 0) {
+    // Find section index for custom section
+    shdr = (Elf64_Shdr*)(elfbuf + ehdr->e_shoff);
+    for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
+      if (shdr->sh_name != 0) {
+	if (secname == shstrbuf + shdr->sh_name) {
+	  mock_index = secno;
+	  cout << "custom index is " << mock_index << endl;
+	  break;
+	}
       }
     }
   }
-
+  
   for (int n=0; n < numsyms; n++, symhdr++) {
     // looking for symbols pointing to the mock section index
-    if (symhdr->st_shndx == mock_index) {
-      if (symhdr->st_name > 0 && ELF64_ST_TYPE(symhdr->st_info) == STT_FUNC) {
+    if (symhdr->st_name > 0 &&
+	ELF64_ST_TYPE(symhdr->st_info) == STT_FUNC &&
+	ELF64_ST_BIND(symhdr->st_info) == STB_GLOBAL) {
+      if (symhdr->st_shndx == mock_index || secname.size() == 0) {
 	string name = strbuf + symhdr->st_name;
+	cout << "adding " << name << " to function list\n";
 	mockfuncs.push_back(name);
       }
     }
   }
 
+  if (mockfuncs.size() > initial_function_number)
+    found = true;
+
   return found;
 }
 
-  vector<string> mockfuncs;	// use unordered_set?
+void extract_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs)
+{
+  string secname("");
+  (void)extract_function_names(ehdr, mockfuncs, secname);
+}
 
 int main(int argc, char** argv)
 {
@@ -523,6 +492,7 @@ int main(int argc, char** argv)
   vector<string> mockfiles;
   vector<string> nonmockfiles;
   vector<string> objfiles;
+  vector<string> mockfuncs;	// use unordered_set?
 
   string mock_prefix("mock");
   string section_name(".mock");
@@ -577,23 +547,18 @@ int main(int argc, char** argv)
   init_tables();
 
   /*
-   * First build up a list of function names we want to superceed from
-   * the list of mock files.  These are files that were explicitly
-   * identified as providing replacement functions.
+   * First build up a list of function names we want to replace from
+   * the list of explicit mock files.  All global function names
+   * defined in these files will be included.
    */
   for (auto pFile = mockfiles.begin(); pFile != mockfiles.end(); pFile++) {
     ElfFile elfFile(*pFile);
     
     auto ehdr = elfFile.Handle();
+    if (!ehdr)
+      continue;
 
-    map<string, Elf64_Sym*> mock_symtab;
-    build_symbol_table(ehdr, mock_symtab);
-
-    for (auto p = mock_symtab.begin(); p != mock_symtab.end(); p++) {
-      mockfuncs.push_back(p->first);
-    }
-
-    mock_symtab.erase(mock_symtab.begin(), mock_symtab.end());
+    extract_function_names(ehdr, mockfuncs);
   }
 
   /*
@@ -608,7 +573,7 @@ int main(int argc, char** argv)
     if (!ehdr)
       continue;
 
-    if (extract_mock_function_names(ehdr, mockfuncs, section_name)) {
+    if (extract_function_names(ehdr, mockfuncs, section_name)) {
       mockfiles.push_back(*pFile);
     } else {
       nonmockfiles.push_back(*pFile);
