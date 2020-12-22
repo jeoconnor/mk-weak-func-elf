@@ -27,6 +27,50 @@ map<int, string> stt_name;
 map<int, string> stb_name;
 map<int, string> sht_name;
 
+static tuple<void*, size_t> memory_map_file(string& file);
+static bool verify_elf(Elf64_Ehdr* hdr);
+
+class ElfFile {
+public:
+  ElfFile(string& _filename) {
+    init(_filename);
+  }
+
+  ~ElfFile() {
+    deinit();
+  }
+
+  void init(string& _filename) {
+    filename = _filename;
+    auto [_ehdr, _size] = memory_map_file(filename);
+    ehdr = (Elf64_Ehdr*)_ehdr;
+    size = _size;
+    if (!verify_elf(ehdr)) {
+      cout << "error: invalid elf file " << filename << endl;
+      deinit();
+    }
+  }
+
+  void deinit() {
+    if (ehdr) {
+      if (munmap(ehdr, size) < 0) {
+	perror("munmap");
+      }
+      ehdr = nullptr;
+      size = 0;
+    }
+  }
+
+  bool ok() { return ehdr != nullptr && size != 0; }
+  Elf64_Ehdr* Handle() { return ehdr; }
+  int Size() { return size; }
+
+  string filename;
+  int size;
+  Elf64_Ehdr* ehdr;
+
+};
+
 bool extract_mock_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string& secname);
 
 static void usage(const char* name)
@@ -58,6 +102,49 @@ static void init_tables()
   stb_name[STB_LOCAL]     = "LOCAL";
   stb_name[STB_GLOBAL]    = "GLOBAL";
   stb_name[STB_WEAK]      = "WEAK";
+}
+
+Elf64_Shdr* get_section_header(Elf64_Ehdr* ehdr)
+{
+  char* buffer = (char*)ehdr;
+  return (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+}
+
+tuple<Elf64_Sym*, int> get_symbol_header(Elf64_Ehdr* ehdr)
+{
+  char* buffer = (char*)ehdr;
+  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+  for (int secno = 0; secno < ehdr->e_shnum; secno++, shdr++) {
+    if (shdr->sh_type == SHT_SYMTAB) {
+      int nsyms = shdr->sh_size / shdr->sh_entsize;
+      return {(Elf64_Sym*)(buffer + shdr->sh_offset), nsyms};
+    }
+  }
+  return {nullptr, 0};
+}
+
+char* get_section_string_buffer(Elf64_Ehdr* ehdr)
+{
+  char* buffer = (char*)ehdr;
+  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+  for (int secno = 0; secno < ehdr->e_shnum; secno++, shdr++) {
+    if (shdr->sh_type == SHT_STRTAB && secno == ehdr->e_shstrndx) {
+      return (buffer + shdr->sh_offset);
+    }
+  }
+  return nullptr;
+}
+
+char* get_symbol_string_buffer(Elf64_Ehdr* ehdr)
+{
+  char* buffer = (char*)ehdr;
+  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+  for (int secno = 0; secno < ehdr->e_shnum; secno++, shdr++) {
+    if (shdr->sh_type == SHT_STRTAB && secno != ehdr->e_shstrndx) {
+      return (char*)(buffer + shdr->sh_offset);
+    }
+  }
+  return nullptr;
 }
 
 void get_last_directory_segment(string& s, const char delim, string& last_seg)
@@ -237,13 +324,13 @@ static tuple<void*, size_t> memory_map_file(string& file)
   int fd = open(file.c_str(), O_RDWR);
   if (fd < 0) {
     perror("open");
-    exit(1);
+    return {nullptr, 0};
   }
 
   struct stat statbuf;
   if (fstat(fd, &statbuf)) {
     perror("stat");
-    exit(1);
+    return {nullptr, 0};
   }
 
   auto ptr = mmap(NULL, statbuf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
@@ -438,11 +525,11 @@ int main(int argc, char** argv)
   vector<string> objfiles;
 
   string mock_prefix("mock");
-  string section_name(".mock");\
+  string section_name(".mock");
   string file_suffix("");
 
   bool list_flag = false;
-  bool weak_flag = false;	// This is the point but require explicit request
+  bool write_flag = false;	// This is the point but require explicit request
 
   int c;
   while ((c = getopt(argc, argv, "m:f:LW")) != -1) {
@@ -457,7 +544,7 @@ int main(int argc, char** argv)
       list_flag = true;
       break;
     case 'W':
-      weak_flag = true;
+      write_flag = true;
       break;
     default:
       usage(argv[0]);
@@ -487,27 +574,7 @@ int main(int argc, char** argv)
     optind++;
   }
 
-  // vector<string> nonmockfiles;
-  // for(auto p = objfiles.begin(); p != objfiles.end(); p++) {
-  //   cout << "p=" << *p << endl;
-  //   if (is_mockfile(*p, section_name)) {
-  //     mockfiles.push_back(*p);
-  //   } else {
-  //     nonmockfiles.push_back(*p);
-  //   }
-  // }
-  // objfiles.erase(objfiles.begin(), objfiles.end());
-
   init_tables();
-
-  // for (auto pFile = nonmockfiles.begin(); pFile != nonmockfiles.end(); p++) {
-  //   auto [ehdr, size] = memory_map_elf_file(*pFile);
-  //   if (!verify_elf(ehdr)) {
-  //     cout << "error: invalid elf file " << *pFile << endl;
-  //     exit(1);
-  //   }
-
-  // }
 
   /*
    * First build up a list of function names we want to superceed from
@@ -515,35 +582,18 @@ int main(int argc, char** argv)
    * identified as providing replacement functions.
    */
   for (auto pFile = mockfiles.begin(); pFile != mockfiles.end(); pFile++) {
-    auto [ehdr, size] = memory_map_elf_file(*pFile);
-    if (!verify_elf(ehdr)) {
-      cout << "error: invalid elf file " << *pFile << endl;
-      exit(1);
-    }
-    cout << "file: " << *pFile << endl;
-    // map<string, int> shidx_table;
-    // create_section_name_index_table(ehdr, shidx_table);
-    // for (auto p = shidx_table.begin(); p != shidx_table.end(); p++) {
-    //   cout << "XXX " << p->first << " " << p->second << endl;
-    // }
+    ElfFile elfFile(*pFile);
     
+    auto ehdr = elfFile.Handle();
+
     map<string, Elf64_Sym*> mock_symtab;
     build_symbol_table(ehdr, mock_symtab);
 
     for (auto p = mock_symtab.begin(); p != mock_symtab.end(); p++) {
       mockfuncs.push_back(p->first);
     }
-    // Done with the file, unmap it
-    if (munmap(ehdr, size) != 0) {
-      perror("munmap");
-    }
 
     mock_symtab.erase(mock_symtab.begin(), mock_symtab.end());
-  }
-
-  // See what we got
-  for(auto p = mockfuncs.begin(); p != mockfuncs.end(); p++) {
-    cout << "  function name = " << *p << endl;
   }
 
   /*
@@ -552,12 +602,11 @@ int main(int argc, char** argv)
    * Separate the files into mock and non-mock lists.
    */
   for(auto pFile = objfiles.begin(); pFile != objfiles.end(); pFile++) {
-    auto [ehdr, size] = memory_map_elf_file(*pFile);
-    if (!verify_elf(ehdr)) {
-      cout << "error: invalid elf file " << *pFile << endl;
-      exit(1);
-    }
-    cout << "file: " << *pFile << endl;
+    ElfFile elfFile(*pFile);
+
+    auto ehdr = elfFile.Handle();
+    if (!ehdr)
+      continue;
 
     if (extract_mock_function_names(ehdr, mockfuncs, section_name)) {
       mockfiles.push_back(*pFile);
@@ -570,51 +619,32 @@ int main(int argc, char** argv)
    * The non-mock files are the ones to modify
    */
   for(auto pFile = nonmockfiles.begin(); pFile != nonmockfiles.end(); pFile++) {
-    map<string, Elf64_Sym*> symbol_table;
+    ElfFile elfFile(*pFile);
 
-    cout << "> " << *pFile << endl;
-    string outfile = *pFile + file_suffix;
-    auto [ehdr, size] = memory_map_elf_file_copy(*pFile, outfile);
-    if (!verify_elf(ehdr)) {
-      cout << "error: invalid elf file " << *pFile << endl;
-      exit(1);
-    }
-    // create_section_header_string_table(ehdr, shstrtab);
-    build_symbol_table(ehdr, symbol_table);
-    // add_any_mock_symbols(mock_ehdr);
+    auto ehdr = elfFile.Handle();
+    if (!ehdr)
+      continue;
 
-    cout << "Symbol Table:\n"; 
-    for (auto p=symbol_table.begin(); p!=symbol_table.end(); p++) {
-      cout << "  " << p->first << endl;
-    }
-
-    if (list_flag) {
-      // if (mock_ehdr != nullptr)
-      //   show_symbol_table(mock_ehdr);
-      // else
-      show_function_list(ehdr, symbol_table);
-    }
-
-    if (weak_flag) {
-      for (auto p = mockfuncs.begin(); p < mockfuncs.end(); p++) {
-	cout << "patching " << *p << endl;
-	auto shdr = symbol_table[*p];
-	if (shdr) {
-	  printf("st_info 0x%08x\n", shdr->st_info);
-	  shdr->st_info = ELF64_ST_INFO(STB_WEAK, ELF64_ST_TYPE(shdr->st_info));
-	  printf("st_info 0x%08x\n", shdr->st_info);
-	} else {
-	  cout << "symbol table: " << *p << " not found\n"; 
+    char* symbuf = get_symbol_string_buffer(ehdr);
+    auto [shdr, nsyms] = get_symbol_header(ehdr);
+    for (int idx=0; idx < nsyms; idx++, shdr++) {
+      string func_name(symbuf + shdr->st_name);
+      if (shdr->st_name != 0 && ELF64_ST_TYPE(shdr->st_info) == STT_FUNC) {
+	for (auto p=mockfuncs.begin(); p<mockfuncs.end(); p++) {
+	  if (*p == func_name) {
+	    if (write_flag) {
+	      cout << "patching " << func_name << " in " << *pFile << endl;
+	      shdr->st_info = ELF64_ST_INFO(STB_WEAK, ELF64_ST_TYPE(shdr->st_info));
+	    }
+	  }
 	}
       }
-
-      if (msync(ehdr, size, MS_SYNC) != 0) {
-	perror("msync");
-      }
     }
 
-    if (munmap(ehdr, size) != 0) {
-      perror("munmap");
+    if (write_flag) {
+      if (msync(ehdr, elfFile.Size(), MS_SYNC) != 0) {
+	perror("msync");
+      }
     }
   }
 
