@@ -18,4 +18,5 @@ add_executable(${BINARY} mock-elfpatch.cpp)
 
 target_link_options(${BINARY} PRIVATE -ggdb -lelf)
 
-#add_subdirectory(test)
+# these are compile tests: looking for failure to link
+add_subdirectory(test)
