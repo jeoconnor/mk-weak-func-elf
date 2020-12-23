@@ -103,16 +103,21 @@ static void init_tables()
   stb_name[STB_WEAK]      = "WEAK";
 }
 
-Elf64_Shdr* get_section_header(Elf64_Ehdr* ehdr)
+template <class ElfNN_Ehdr, class ElfNN_Shdr>
+ElfNN_Shdr* get_section_header(ElfNN_Ehdr* ehdr)
 {
   char* buffer = (char*)ehdr;
-  return (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+  return (ElfNN_Shdr*)(buffer + ehdr->e_shoff);
 }
 
 tuple<Elf64_Sym*, int> get_symbol_header(Elf64_Ehdr* ehdr)
 {
+#if 1
   char* buffer = (char*)ehdr;
   Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+#else
+  auto shdr = get_section_header(ehdr);
+#endif
   for (int secno = 0; secno < ehdr->e_shnum; secno++, shdr++) {
     if (shdr->sh_type == SHT_SYMTAB) {
       int nsyms = shdr->sh_size / shdr->sh_entsize;
@@ -122,10 +127,11 @@ tuple<Elf64_Sym*, int> get_symbol_header(Elf64_Ehdr* ehdr)
   return {nullptr, 0};
 }
 
-char* get_section_string_buffer(Elf64_Ehdr* ehdr)
+template <class ElfNN_Ehdr, class ElfNN_Shdr>
+char* get_section_string_buffer(ElfNN_Ehdr* ehdr)
 {
   char* buffer = (char*)ehdr;
-  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+  ElfNN_Shdr* shdr = (ElfNN_Shdr*)(buffer + ehdr->e_shoff);
   for (int secno = 0; secno < ehdr->e_shnum; secno++, shdr++) {
     if (shdr->sh_type == SHT_STRTAB && secno == ehdr->e_shstrndx) {
       return (buffer + shdr->sh_offset);
@@ -297,12 +303,41 @@ void extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist)
   (void)extract_function_names(ehdr, funclist, secname);
 }
 
+void patch_files(vector<string>& objfiles, vector<string>& function_names)
+{
+  for(auto pFile = objfiles.begin(); pFile != objfiles.end(); pFile++) {
+    ElfFile elfFile(*pFile);
+
+    auto ehdr = elfFile.Handle();
+    if (!ehdr)
+      continue;
+
+    char* symbuf = get_symbol_string_buffer(ehdr);
+    auto [shdr, nsyms] = get_symbol_header(ehdr);
+    for (int idx=0; idx < nsyms; idx++, shdr++) {
+      // XXX check also that it is GLOBAL
+      if (shdr->st_name != 0 && ELF64_ST_TYPE(shdr->st_info) == STT_FUNC) {
+	for (auto p=function_names.begin(); p!=function_names.end(); p++) {
+	  string func_name(symbuf + shdr->st_name);
+	  if (*p == func_name) {
+	      cout << "patching " << func_name << " in " << *pFile << endl;
+	      shdr->st_info = ELF64_ST_INFO(STB_WEAK, ELF64_ST_TYPE(shdr->st_info));
+	  }
+	}
+      }
+    }
+
+    if (msync(ehdr, elfFile.Size(), MS_SYNC) != 0) {
+      perror("msync");
+    }
+  }
+}
+
 int main(int argc, char** argv)
 {
-  vector<string> srcfiles;	// contain replacement function definitions
-  vector<string> tgtfiles;	// contain functions to be replaced
-  vector<string> objfiles;	// unclassified input files
-  vector<string> funcset;	// use unordered_set?
+  vector<string> dupfiles;	// contain replacement function definitions
+  vector<string> infiles;	// unclassified input files
+  vector<string> funclist;	// use unordered_set?
 
   string select_prefix("mock");
   string section_name(".mock");
@@ -314,10 +349,10 @@ int main(int argc, char** argv)
   while ((c = getopt(argc, argv, "r:f:lw")) != -1) {
     switch (c) {
     case 'm':
-      srcfiles.push_back(optarg);
+      dupfiles.push_back(optarg);
       break;
     case 'f':
-      funcset.push_back(optarg);
+      funclist.push_back(optarg);
       break;
     case 'l':
       list_flag = true;
@@ -345,9 +380,9 @@ int main(int argc, char** argv)
   while (optind < argc) {
     string s = argv[optind];
     if (file_has_select_prefix(s, select_prefix))
-      srcfiles.push_back(s);
+      dupfiles.push_back(s);
     else
-      objfiles.push_back(s);
+      infiles.push_back(s);
     optind++;
   }
 
@@ -358,14 +393,14 @@ int main(int argc, char** argv)
    * the list of explicit mock files.  All global function names
    * defined in these files will be included.
    */
-  for (auto pFile = srcfiles.begin(); pFile != srcfiles.end(); pFile++) {
+  for (auto pFile = dupfiles.begin(); pFile != dupfiles.end(); pFile++) {
     ElfFile elfFile(*pFile);
     
     auto ehdr = elfFile.Handle();
     if (!ehdr)
       continue;
 
-    extract_function_names(ehdr, funcset);
+    extract_function_names(ehdr, funclist);
   }
 
   /*
@@ -373,22 +408,22 @@ int main(int argc, char** argv)
    * attribute labeled functions to the list of mock functions.
    * Separate the files into mock and non-mock lists.
    */
-  for(auto pFile = objfiles.begin(); pFile != objfiles.end(); pFile++) {
+
+  vector<string> objfiles;	// contain functions to be replaced
+  for(auto pFile = infiles.begin(); pFile != infiles.end(); pFile++) {
     ElfFile elfFile(*pFile);
 
     auto ehdr = elfFile.Handle();
     if (!ehdr)
       continue;
 
-    if (extract_function_names(ehdr, funcset, section_name)) {
-      srcfiles.push_back(*pFile);
-    } else {
-      tgtfiles.push_back(*pFile);
+    if (!extract_function_names(ehdr, funclist, section_name)) {
+      objfiles.push_back(*pFile);
     }
   }
 
   if (list_flag) {
-    for (auto p=funcset.begin(); p<funcset.end(); p++) {
+    for (auto p=funclist.begin(); p<funclist.end(); p++) {
       cout << *p << endl;
     }
     exit(0);
@@ -397,35 +432,8 @@ int main(int argc, char** argv)
   /*
    * The non-mock files are the ones to modify
    */
-  for(auto pFile = tgtfiles.begin(); pFile != tgtfiles.end(); pFile++) {
-    ElfFile elfFile(*pFile);
-
-    auto ehdr = elfFile.Handle();
-    if (!ehdr)
-      continue;
-
-    char* symbuf = get_symbol_string_buffer(ehdr);
-    auto [shdr, nsyms] = get_symbol_header(ehdr);
-    for (int idx=0; idx < nsyms; idx++, shdr++) {
-      if (shdr->st_name != 0 && ELF64_ST_TYPE(shdr->st_info) == STT_FUNC) {
-	for (auto p=funcset.begin(); p<funcset.end(); p++) {
-	  string func_name(symbuf + shdr->st_name);
-	  if (*p == func_name) {
-	    if (write_flag) {
-	      cout << "patching " << func_name << " in " << *pFile << endl;
-	      shdr->st_info = ELF64_ST_INFO(STB_WEAK, ELF64_ST_TYPE(shdr->st_info));
-	    }
-	  }
-	}
-      }
-    }
-
-    if (write_flag) {
-      if (msync(ehdr, elfFile.Size(), MS_SYNC) != 0) {
-	perror("msync");
-      }
-    }
-  }
+  if (write_flag)
+    patch_files(objfiles, funclist);
 
   exit(0);
 }
