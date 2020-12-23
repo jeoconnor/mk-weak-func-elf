@@ -318,12 +318,6 @@ bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist, string& 
   return found;
 }
 
-void extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist)
-{
-  string secname("");
-  (void)extract_function_names(ehdr, funclist, secname);
-}
-
 void patch_files(vector<string>& objfiles, vector<string>& function_names)
 {
   for(auto pFile = objfiles.begin(); pFile != objfiles.end(); pFile++) {
@@ -354,6 +348,39 @@ void patch_files(vector<string>& objfiles, vector<string>& function_names)
   }
 }
 
+void extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist)
+{
+  string secname("");
+  (void)extract_function_names(ehdr, funclist, secname);
+}
+
+void extract_function_names(vector<string>& dupfiles, vector<string>& funclist)
+{
+  for (auto pFile = dupfiles.begin(); pFile != dupfiles.end(); pFile++) {
+    ElfFile elfFile(*pFile);
+    
+    auto ehdr = elfFile.Handle();
+    if (ehdr)
+      extract_function_names(ehdr, funclist);
+  }
+}
+
+void extract_labeled_function_names(vector<string>& infiles, vector<string>& funclist,
+				    string& section_name, vector<string>& outfiles)
+{
+  for(auto pFile = infiles.begin(); pFile != infiles.end(); pFile++) {
+    ElfFile elfFile(*pFile);
+
+    auto ehdr = elfFile.Handle();
+    if (!ehdr)
+      continue;
+
+    if (!extract_function_names(ehdr, funclist, section_name)) {
+      outfiles.push_back(*pFile);
+    }
+  }
+}
+
 int main(int argc, char** argv)
 {
   vector<string> dupfiles;	// contain replacement function definitions
@@ -369,7 +396,7 @@ int main(int argc, char** argv)
   int c;
   while ((c = getopt(argc, argv, "r:f:lw")) != -1) {
     switch (c) {
-    case 'm':
+    case 'r':
       dupfiles.push_back(optarg);
       break;
     case 'f':
@@ -414,39 +441,19 @@ int main(int argc, char** argv)
    * the list of explicit mock files.  All global function names
    * defined in these files will be included.
    */
-  for (auto pFile = dupfiles.begin(); pFile != dupfiles.end(); pFile++) {
-    ElfFile elfFile(*pFile);
-    
-    auto ehdr = elfFile.Handle();
-    if (!ehdr)
-      continue;
-
-    extract_function_names(ehdr, funclist);
-  }
+  extract_function_names(dupfiles, funclist);
 
   /*
-   * Identify object files with a ".mock" section and add .mock
-   * attribute labeled functions to the list of mock functions.
-   * Separate the files into mock and non-mock lists.
+   * Identify object files with an identifed, i.e. labeled, section
+   * and add those function names to the list the function list.
+   * Also, saves the list of objfiles that did not contain labeled
+   * sections.
    */
-
   vector<string> objfiles;	// contain functions to be replaced
-  for(auto pFile = infiles.begin(); pFile != infiles.end(); pFile++) {
-    ElfFile elfFile(*pFile);
-
-    auto ehdr = elfFile.Handle();
-    if (!ehdr)
-      continue;
-
-    if (!extract_function_names(ehdr, funclist, section_name)) {
-      objfiles.push_back(*pFile);
-    }
-  }
+  extract_labeled_function_names(infiles, funclist, section_name, objfiles);
 
   if (list_flag) {
-    for (auto p=funclist.begin(); p<funclist.end(); p++) {
-      cout << *p << endl;
-    }
+    for_each(funclist.begin(), funclist.end(), [](auto p){ cout << p << endl; });
     exit(0);
   }
 
