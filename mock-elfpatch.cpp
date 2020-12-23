@@ -27,9 +27,8 @@ map<int, string> stt_name;
 map<int, string> stb_name;
 map<int, string> sht_name;
 
-bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist, string& secname);
 static tuple<void*, size_t> memory_map_file(string& file);
-static bool verify_elf(Elf64_Ehdr* hdr);
+static unsigned char verify_elf(void* hdr);
 
 class ElfFile {
 public:
@@ -172,27 +171,49 @@ bool file_has_select_prefix(string& filename, string& prefix)
   return (prefix == dirname.substr(0, prefix.size()));
 }
 
-static bool verify_elf(Elf64_Ehdr* hdr)
+/**
+ * Check if input ptr references a valid elf file.  Returns either
+ * ELFCLASS32 or ELFCLASS64 on sucess or ELFCLASSNONE on failure.
+ */
+static unsigned char verify_elf(void* ptr)
 {
-  if (hdr == nullptr) {
+  unsigned char ei_class = ELFCLASSNONE;
+
+  if (ptr == nullptr) {
     printf("error: no file found\n");
-    return false;
+    return ei_class;
   }
-  // Elf header?
-  bool ok = (hdr->e_ident[EI_MAG0] == ELFMAG0 &&
-	     hdr->e_ident[EI_MAG1] == ELFMAG1 &&
-	     hdr->e_ident[EI_MAG2] == ELFMAG2 &&
-	     hdr->e_ident[EI_MAG3] == ELFMAG3);
+
+  auto hdr = (Elf64_Ehdr*)ptr;
+
+  if (hdr->e_ident[EI_MAG0] != ELFMAG0 &&
+      hdr->e_ident[EI_MAG1] != ELFMAG1 &&
+      hdr->e_ident[EI_MAG2] != ELFMAG2 &&
+      hdr->e_ident[EI_MAG3] != ELFMAG3) {
+    cout << "error: Elf magic number not found\n";
+    return ei_class;
+  }
+
+  if (hdr->e_ident[EI_DATA] != ELFDATA2LSB) {
+    cout << "error: file must be 2's complement, little-endian\n";
+    return ei_class;
+  }
 
   // Relocatable object?
-  ok = ok && (hdr->e_type == ET_REL);
-
-  if (!ok) {
-    printf("error: file not Elf relocatable object\n");
-    return false;
+  if (hdr->e_type != ET_REL) {
+    cout << "error: file must be relocatable object\n";
+    return ei_class;
   }
 
-  return true;
+  /* check the class last since its value is returned on success */
+  ei_class = hdr->e_ident[EI_CLASS];
+  if ((ei_class != ELFCLASS32) &&
+      (ei_class != ELFCLASS64)) {
+    cout << "error: only Elf32 and Elf64 architectures supported\n";
+    return ei_class;
+  }
+
+  return ei_class;
 }
 
 static tuple<void*, size_t> memory_map_file(string& file)
