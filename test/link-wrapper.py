@@ -1,37 +1,38 @@
 #!/usr/bin/env python3
 
-print("hello world");
-
 import sys
 import os
 import subprocess
 
-print(sys.argv)
-
-fixopts = []
-stdopts = []
+link_preprocess = ["../mock-elfpatch", "-w"]
 
 infix = False
-
+fixargs = []
+stdargs = []
 for arg in sys.argv[1:]:
-    if arg == "--begin-fix":
+    if arg == "--begin-shim":
         infix = True
-    elif arg == "--end-fix":
+    elif arg == "--end-shim":
         infix = False
     else:
         if infix:
-            fixopts.append(arg)
+            fixargs.append(arg)
         else:
-            stdopts.append(arg)
+            stdargs.append(arg)
 
-cmd = [fixopts[0]]
-cmd = cmd + stdopts
+if len(fixargs) > 0:
+    cmd = [fixargs[0]]
+else:
+    cmd = ["g++"]
 
-print("fix: ", fixopts[1:])
-print("cmd: ", cmd)
+if "-c" in sys.argv:
+    pass
+else:
+    # extract the object files from the command line and
+    # preprocess them
+    objfiles = [arg for arg in stdargs if arg[-2:] == ".o"]
+    subprocess.run(link_preprocess + objfiles)
 
-            
-subprocess.Popen(fixopts[1:])
-subprocess.Popen(cmd)
+subprocess.run(cmd + stdargs)
 
 
