@@ -27,7 +27,7 @@ map<int, string> stt_name;
 map<int, string> stb_name;
 map<int, string> sht_name;
 
-bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string& secname);
+bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist, string& secname);
 static tuple<void*, size_t> memory_map_file(string& file);
 static bool verify_elf(Elf64_Ehdr* hdr);
 
@@ -159,7 +159,7 @@ void get_last_directory_segment(string& s, const char delim, string& last_seg)
   last_seg = s.substr(npos);
 }
 
-bool file_has_mock_prefix(string& filename, string& prefix)
+bool file_has_select_prefix(string& filename, string& prefix)
 {
   string dirname;
   get_last_directory_segment(filename, '/', dirname);
@@ -223,11 +223,11 @@ tuple<Elf64_Ehdr*, size_t> memory_map_elf_file(string& infile)
   return {(Elf64_Ehdr*)ptr, size};
 }
 
-bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string& secname)
+bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist, string& secname)
 {
   bool found = false;
 
-  int initial_function_number = mockfuncs.size();
+  int initial_function_number = funclist.size();
 
   // Section header
   if (!ehdr->e_shoff) {
@@ -256,7 +256,7 @@ bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string&
     }
   }
 
-  int mock_index = 0;
+  int custom_index = 0;
 
   if (secname.size() > 0) {
     // Find section index for custom section
@@ -264,8 +264,8 @@ bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string&
     for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
       if (shdr->sh_name != 0) {
 	if (secname == shstrbuf + shdr->sh_name) {
-	  mock_index = secno;
-	  cout << "custom index is " << mock_index << endl;
+	  custom_index = secno;
+	  cout << "custom index is " << custom_index << endl;
 	  break;
 	}
       }
@@ -277,54 +277,52 @@ bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs, string&
     if (symhdr->st_name > 0 &&
 	ELF64_ST_TYPE(symhdr->st_info) == STT_FUNC &&
 	ELF64_ST_BIND(symhdr->st_info) == STB_GLOBAL) {
-      if (symhdr->st_shndx == mock_index || secname.size() == 0) {
+      if (symhdr->st_shndx == custom_index || secname.size() == 0) {
 	string name = strbuf + symhdr->st_name;
 	cout << "adding " << name << " to function list\n";
-	mockfuncs.push_back(name);
+	funclist.push_back(name);
       }
     }
   }
 
-  if (mockfuncs.size() > initial_function_number)
+  if (funclist.size() > initial_function_number)
     found = true;
 
   return found;
 }
 
-void extract_function_names(Elf64_Ehdr* ehdr, vector<string>& mockfuncs)
+void extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist)
 {
   string secname("");
-  (void)extract_function_names(ehdr, mockfuncs, secname);
+  (void)extract_function_names(ehdr, funclist, secname);
 }
 
 int main(int argc, char** argv)
 {
-  string infile;
-  vector<string> mockfiles;
-  vector<string> nonmockfiles;
-  vector<string> objfiles;
-  vector<string> mockfuncs;	// use unordered_set?
+  vector<string> srcfiles;	// contain replacement function definitions
+  vector<string> tgtfiles;	// contain functions to be replaced
+  vector<string> objfiles;	// unclassified input files
+  vector<string> funcset;	// use unordered_set?
 
-  string mock_prefix("mock");
+  string select_prefix("mock");
   string section_name(".mock");
-  string file_suffix("");
 
   bool list_flag = false;
   bool write_flag = false;	// This is the point but require explicit request
 
   int c;
-  while ((c = getopt(argc, argv, "m:f:LW")) != -1) {
+  while ((c = getopt(argc, argv, "r:f:lw")) != -1) {
     switch (c) {
     case 'm':
-      mockfiles.push_back(optarg);
+      srcfiles.push_back(optarg);
       break;
     case 'f':
-      mockfuncs.push_back(optarg);
+      funcset.push_back(optarg);
       break;
-    case 'L':
+    case 'l':
       list_flag = true;
       break;
-    case 'W':
+    case 'w':
       write_flag = true;
       break;
     default:
@@ -337,19 +335,17 @@ int main(int argc, char** argv)
     int this_option_optind = optind ? optind : 1;
     int option_index = 0;
     static struct option long_options[] = {
-        {"input-file",    required_argument, 0, 'i'},
-        {"output-file",   required_argument, 0, 'o'},
-        {"mock-file",     required_argument, 0, 'm'},
-        {"function-name", required_argument, 0, 'f'},
-        {"write-flag",    no_argument,       0, 'W'},
+        {"replacement-file", required_argument, 0, 'r'},
+        {"function-name",    required_argument, 0, 'f'},
+        {"write-flag",       no_argument,       0, 'w'},
 	{0,               0,                 0,  0 }
     };
   }
 #endif
   while (optind < argc) {
     string s = argv[optind];
-    if (file_has_mock_prefix(s, mock_prefix))
-      mockfiles.push_back(s);
+    if (file_has_select_prefix(s, select_prefix))
+      srcfiles.push_back(s);
     else
       objfiles.push_back(s);
     optind++;
@@ -362,14 +358,14 @@ int main(int argc, char** argv)
    * the list of explicit mock files.  All global function names
    * defined in these files will be included.
    */
-  for (auto pFile = mockfiles.begin(); pFile != mockfiles.end(); pFile++) {
+  for (auto pFile = srcfiles.begin(); pFile != srcfiles.end(); pFile++) {
     ElfFile elfFile(*pFile);
     
     auto ehdr = elfFile.Handle();
     if (!ehdr)
       continue;
 
-    extract_function_names(ehdr, mockfuncs);
+    extract_function_names(ehdr, funcset);
   }
 
   /*
@@ -384,17 +380,24 @@ int main(int argc, char** argv)
     if (!ehdr)
       continue;
 
-    if (extract_function_names(ehdr, mockfuncs, section_name)) {
-      mockfiles.push_back(*pFile);
+    if (extract_function_names(ehdr, funcset, section_name)) {
+      srcfiles.push_back(*pFile);
     } else {
-      nonmockfiles.push_back(*pFile);
+      tgtfiles.push_back(*pFile);
     }
+  }
+
+  if (list_flag) {
+    for (auto p=funcset.begin(); p<funcset.end(); p++) {
+      cout << *p << endl;
+    }
+    exit(0);
   }
 
   /*
    * The non-mock files are the ones to modify
    */
-  for(auto pFile = nonmockfiles.begin(); pFile != nonmockfiles.end(); pFile++) {
+  for(auto pFile = tgtfiles.begin(); pFile != tgtfiles.end(); pFile++) {
     ElfFile elfFile(*pFile);
 
     auto ehdr = elfFile.Handle();
@@ -404,9 +407,9 @@ int main(int argc, char** argv)
     char* symbuf = get_symbol_string_buffer(ehdr);
     auto [shdr, nsyms] = get_symbol_header(ehdr);
     for (int idx=0; idx < nsyms; idx++, shdr++) {
-      string func_name(symbuf + shdr->st_name);
       if (shdr->st_name != 0 && ELF64_ST_TYPE(shdr->st_info) == STT_FUNC) {
-	for (auto p=mockfuncs.begin(); p<mockfuncs.end(); p++) {
+	for (auto p=funcset.begin(); p<funcset.end(); p++) {
+	  string func_name(symbuf + shdr->st_name);
 	  if (*p == func_name) {
 	    if (write_flag) {
 	      cout << "patching " << func_name << " in " << *pFile << endl;
