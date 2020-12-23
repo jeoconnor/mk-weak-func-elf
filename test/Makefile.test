@@ -4,7 +4,7 @@ failures	= test-single-func-fail
 
 SECTION		= .mock
 
-PRELINK		= ../mock-elfpatch -W
+PRELINK		= ../mock-elfpatch -w
 
 all:
 	@for x in $(targets); do \
