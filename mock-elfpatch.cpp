@@ -17,11 +17,6 @@
 
 using namespace std;
 
-using TableIntStr = map<int, string>;
-using TableStrInt = map<string, int>;
-
-// using SymbolTable = Table
-
 // These are used for displaying field names
 map<int, string> stt_name;
 map<int, string> stb_name;
@@ -30,6 +25,14 @@ map<int, string> sht_name;
 static tuple<void*, size_t> memory_map_file(string& file);
 static unsigned char verify_elf(void* hdr);
 
+template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
+void process_files(vector<string>& infiles, vector<string>& dupfiles, vector<string>& funclist,
+		   string& section_name, bool write_flag);
+
+template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
+bool extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist, string& secname);
+
+template <typename ElfNN_Ehdr>
 class ElfFile {
 public:
   ElfFile(string& _filename) {
@@ -43,12 +46,16 @@ public:
   void init(string& _filename) {
     filename = _filename;
     auto [_ehdr, _size] = memory_map_file(filename);
-    ehdr = (Elf64_Ehdr*)_ehdr;
+    ehdr = (ElfNN_Ehdr*)_ehdr;
     size = _size;
     if (!verify_elf(ehdr)) {
       cout << "error: invalid elf file " << filename << endl;
       deinit();
     }
+  }
+
+  char check_arch() {
+    return ehdr->e_ident[EI_CLASS];
   }
 
   void deinit() {
@@ -62,14 +69,17 @@ public:
   }
 
   bool ok() { return ehdr != nullptr && size != 0; }
-  Elf64_Ehdr* Handle() { return ehdr; }
+  ElfNN_Ehdr* Handle() { return ehdr; }
   int Size() { return size; }
 
   string filename;
   int size;
-  Elf64_Ehdr* ehdr;
+  ElfNN_Ehdr* ehdr;
 
 };
+
+using ElfFile64 = ElfFile<Elf64_Ehdr>;
+using ElfFile32 = ElfFile<Elf32_Ehdr>;
 
 static void usage(const char* name)
 {
@@ -102,32 +112,29 @@ static void init_tables()
   stb_name[STB_WEAK]      = "WEAK";
 }
 
-template <class ElfNN_Ehdr, class ElfNN_Shdr>
+template <typename ElfNN_Ehdr,  typename ElfNN_Shdr>
 ElfNN_Shdr* get_section_header(ElfNN_Ehdr* ehdr)
 {
   char* buffer = (char*)ehdr;
   return (ElfNN_Shdr*)(buffer + ehdr->e_shoff);
 }
 
-tuple<Elf64_Sym*, int> get_symbol_header(Elf64_Ehdr* ehdr)
+template <typename ElfNN_Shdr, typename ElfNN_Sym, typename ElfNN_Ehdr>
+tuple<ElfNN_Sym*, int> get_symbol_header(ElfNN_Ehdr* ehdr)
 {
-#if 1
   char* buffer = (char*)ehdr;
-  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
-#else
-  auto shdr = get_section_header(ehdr);
-#endif
+  auto shdr = get_section_header<ElfNN_Ehdr, ElfNN_Shdr>(ehdr);
   for (int secno = 0; secno < ehdr->e_shnum; secno++, shdr++) {
     if (shdr->sh_type == SHT_SYMTAB) {
       int nsyms = shdr->sh_size / shdr->sh_entsize;
-      return {(Elf64_Sym*)(buffer + shdr->sh_offset), nsyms};
+      return {(ElfNN_Sym*)(buffer + shdr->sh_offset), nsyms};
     }
   }
   return {nullptr, 0};
 }
 
-template <class ElfNN_Ehdr, class ElfNN_Shdr>
-char* get_section_string_buffer(ElfNN_Ehdr* ehdr)
+template <typename ElfN_Ehdr, typename ElfNN_Shdr>
+char* get_section_string_buffer(ElfN_Ehdr* ehdr)
 {
   char* buffer = (char*)ehdr;
   ElfNN_Shdr* shdr = (ElfNN_Shdr*)(buffer + ehdr->e_shoff);
@@ -139,10 +146,11 @@ char* get_section_string_buffer(ElfNN_Ehdr* ehdr)
   return nullptr;
 }
 
-char* get_symbol_string_buffer(Elf64_Ehdr* ehdr)
+template<typename ElfNN_Shdr, typename ElfNN_Ehdr>
+char* get_symbol_string_buffer(ElfNN_Ehdr* ehdr)
 {
   char* buffer = (char*)ehdr;
-  Elf64_Shdr* shdr = (Elf64_Shdr*)(buffer + ehdr->e_shoff);
+  ElfNN_Shdr* shdr = (ElfNN_Shdr*)(buffer + ehdr->e_shoff);
   for (int secno = 0; secno < ehdr->e_shnum; secno++, shdr++) {
     if (shdr->sh_type == SHT_STRTAB && secno != ehdr->e_shstrndx) {
       return (char*)(buffer + shdr->sh_offset);
@@ -216,6 +224,12 @@ static unsigned char verify_elf(void* ptr)
   return ei_class;
 }
 
+char check_arch(string& filename)
+{
+  ElfFile64 elfFile(filename);
+  return elfFile.check_arch();
+}
+
 static tuple<void*, size_t> memory_map_file(string& file)
 {
   if (file.size() == 0)
@@ -250,7 +264,20 @@ tuple<Elf64_Ehdr*, size_t> memory_map_elf_file(string& infile)
   return {(Elf64_Ehdr*)ptr, size};
 }
 
-bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist, string& secname)
+inline bool symbol_check_type(Elf64_Sym* sym) {
+  return (sym->st_name > 0) &&
+    (ELF64_ST_TYPE(sym->st_info) == STT_FUNC) &&
+    (ELF64_ST_BIND(sym->st_info) == STB_GLOBAL);
+}
+  
+inline bool symbol_check_type(Elf32_Sym* sym) {
+  return (sym->st_name > 0) &&
+    (ELF32_ST_TYPE(sym->st_info) == STT_FUNC) &&
+    (ELF32_ST_BIND(sym->st_info) == STB_GLOBAL);
+}
+  
+template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
+bool extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist, string& secname)
 {
   bool found = false;
 
@@ -264,13 +291,19 @@ bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist, string& 
 
   char* elfbuf = (char*)ehdr;
   
-  Elf64_Sym* symhdr = nullptr;	// symbol table
+  ElfNN_Sym* symhdr = nullptr;	// symbol table
 
   char* shstrbuf = nullptr;	// section header string buffer
   char* strbuf = nullptr;	// symbol name string buffer
 
-  int numsyms = 0;
-  Elf64_Shdr* shdr = (Elf64_Shdr*)(elfbuf + ehdr->e_shoff);
+  /*
+   * Scan through the section header table locating the symbol string
+   * buffer, the section header symbol string buffer and the symbol
+   * table.  Result is pointers to each plus the number of entries in
+   * the symbol table.
+   */
+  int numsyms = 0;		// No. entries in the symbol table
+  ElfNN_Shdr* shdr = (ElfNN_Shdr*)(elfbuf + ehdr->e_shoff);
   for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
     if (shdr->sh_type == SHT_STRTAB) {
       if (secno == ehdr->e_shstrndx)
@@ -278,32 +311,41 @@ bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist, string& 
       else
 	strbuf = elfbuf + shdr->sh_offset;
     } else if (shdr->sh_type == SHT_SYMTAB) {
-      symhdr = (Elf64_Sym*)(elfbuf + shdr->sh_offset);
+      symhdr = (ElfNN_Sym*)(elfbuf + shdr->sh_offset);
       numsyms = shdr->sh_size / shdr->sh_entsize;
     }
   }
 
+  /*
+   * Now scan through the section header symbol table looking for our
+   * special section.
+   */
   int custom_index = 0;
-
   if (secname.size() > 0) {
     // Find section index for custom section
-    shdr = (Elf64_Shdr*)(elfbuf + ehdr->e_shoff);
+    shdr = (ElfNN_Shdr*)(elfbuf + ehdr->e_shoff);
     for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
       if (shdr->sh_name != 0) {
 	if (secname == shstrbuf + shdr->sh_name) {
 	  custom_index = secno;
-	  cout << "custom index is " << custom_index << endl;
+	  // cout << "custom index is " << custom_index << endl;
 	  break;
 	}
       }
     }
   }
-  
+
+  /*
+   * Look for symbols referencing the special section
+   */
   for (int n=0; n < numsyms; n++, symhdr++) {
-    // looking for symbols pointing to the mock section index
+#if 0
     if (symhdr->st_name > 0 &&
 	ELF64_ST_TYPE(symhdr->st_info) == STT_FUNC &&
 	ELF64_ST_BIND(symhdr->st_info) == STB_GLOBAL) {
+#else
+      if (symbol_check_type(symhdr)) {
+#endif
       if (symhdr->st_shndx == custom_index || secname.size() == 0) {
 	string name = strbuf + symhdr->st_name;
 	cout << "adding " << name << " to function list\n";
@@ -318,28 +360,48 @@ bool extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist, string& 
   return found;
 }
 
+void patch_file(Elf64_Sym *shdr, char* symbuf, vector<string>& function_names)
+{
+  // XXX check also that it is GLOBAL
+  if (shdr->st_name != 0 && ELF64_ST_TYPE(shdr->st_info) == STT_FUNC) {
+    for (auto p=function_names.begin(); p!=function_names.end(); p++) {
+      string func_name(symbuf + shdr->st_name);
+      if (*p == func_name) {
+	// cout << "patching " << func_name << " in " << *pFile << endl;
+	shdr->st_info = ELF64_ST_INFO(STB_WEAK, ELF64_ST_TYPE(shdr->st_info));
+      }
+    }
+  }
+}
+
+void patch_file(Elf32_Sym *shdr, char* symbuf, vector<string>& function_names)
+{
+  // XXX check also that it is GLOBAL
+  if (shdr->st_name != 0 && ELF32_ST_TYPE(shdr->st_info) == STT_FUNC) {
+    for (auto p=function_names.begin(); p!=function_names.end(); p++) {
+      string func_name(symbuf + shdr->st_name);
+      if (*p == func_name) {
+	// cout << "patching " << func_name << " in " << *pFile << endl;
+	shdr->st_info = ELF32_ST_INFO(STB_WEAK, ELF32_ST_TYPE(shdr->st_info));
+      }
+    }
+  }
+}
+
+template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
 void patch_files(vector<string>& objfiles, vector<string>& function_names)
 {
   for(auto pFile = objfiles.begin(); pFile != objfiles.end(); pFile++) {
-    ElfFile elfFile(*pFile);
+    ElfFile<ElfNN_Ehdr> elfFile(*pFile);
 
     auto ehdr = elfFile.Handle();
     if (!ehdr)
       continue;
 
-    char* symbuf = get_symbol_string_buffer(ehdr);
-    auto [shdr, nsyms] = get_symbol_header(ehdr);
+    char* symbuf = get_symbol_string_buffer<ElfNN_Shdr>(ehdr);
+    auto [shdr, nsyms] = get_symbol_header<ElfNN_Shdr, ElfNN_Sym>(ehdr);
     for (int idx=0; idx < nsyms; idx++, shdr++) {
-      // XXX check also that it is GLOBAL
-      if (shdr->st_name != 0 && ELF64_ST_TYPE(shdr->st_info) == STT_FUNC) {
-	for (auto p=function_names.begin(); p!=function_names.end(); p++) {
-	  string func_name(symbuf + shdr->st_name);
-	  if (*p == func_name) {
-	      cout << "patching " << func_name << " in " << *pFile << endl;
-	      shdr->st_info = ELF64_ST_INFO(STB_WEAK, ELF64_ST_TYPE(shdr->st_info));
-	  }
-	}
-      }
+      patch_file(shdr, symbuf, function_names);
     }
 
     if (msync(ehdr, elfFile.Size(), MS_SYNC) != 0) {
@@ -348,37 +410,68 @@ void patch_files(vector<string>& objfiles, vector<string>& function_names)
   }
 }
 
-void extract_function_names(Elf64_Ehdr* ehdr, vector<string>& funclist)
+template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
+void extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist)
 {
   string secname("");
-  (void)extract_function_names(ehdr, funclist, secname);
+  (void)extract_function_names<ElfNN_Ehdr, ElfNN_Shdr, ElfNN_Sym>(ehdr, funclist, secname);
 }
 
+template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
 void extract_function_names(vector<string>& dupfiles, vector<string>& funclist)
 {
   for (auto pFile = dupfiles.begin(); pFile != dupfiles.end(); pFile++) {
-    ElfFile elfFile(*pFile);
+    ElfFile<ElfNN_Ehdr> elfFile(*pFile);
     
     auto ehdr = elfFile.Handle();
     if (ehdr)
-      extract_function_names(ehdr, funclist);
+      extract_function_names<ElfNN_Ehdr, ElfNN_Shdr, ElfNN_Sym>(ehdr, funclist);
   }
 }
 
+template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
 void extract_labeled_function_names(vector<string>& infiles, vector<string>& funclist,
 				    string& section_name, vector<string>& outfiles)
 {
   for(auto pFile = infiles.begin(); pFile != infiles.end(); pFile++) {
-    ElfFile elfFile(*pFile);
+    ElfFile<ElfNN_Ehdr> elfFile(*pFile);
 
     auto ehdr = elfFile.Handle();
     if (!ehdr)
       continue;
 
-    if (!extract_function_names(ehdr, funclist, section_name)) {
+    if (!extract_function_names<ElfNN_Ehdr, ElfNN_Shdr, ElfNN_Sym>(ehdr, funclist, section_name)) {
       outfiles.push_back(*pFile);
     }
   }
+}
+
+template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
+void process_files(vector<string>& infiles, vector<string>& dupfiles, vector<string>& funclist,
+		   string& section_name, bool write_flag)
+{
+  /*
+   * First build up a list of function names we want to replace from
+   * the list of explicit mock files.  All global function names
+   * defined in these files will be included.
+   */
+  extract_function_names<ElfNN_Ehdr, ElfNN_Shdr, ElfNN_Sym>(dupfiles, funclist);
+
+  /*
+   * Identify object files with an identifed, i.e. labeled, section
+   * and add those function names to the function list.
+   * Also, saves the list of objfiles that did not contain labeled
+   * sections.
+   */
+  vector<string> objfiles;	// contain functions to be replaced
+  extract_labeled_function_names<ElfNN_Ehdr, ElfNN_Shdr, ElfNN_Sym>(infiles, funclist, section_name, objfiles);
+
+  /*
+   * The non-mock files are the ones to modify
+   */
+  if (write_flag)
+    patch_files<ElfNN_Ehdr, ElfNN_Shdr, ElfNN_Sym>(objfiles, funclist);
+
 }
 
 int main(int argc, char** argv)
@@ -418,10 +511,10 @@ int main(int argc, char** argv)
     int this_option_optind = optind ? optind : 1;
     int option_index = 0;
     static struct option long_options[] = {
-        {"replacement-file", required_argument, 0, 'r'},
-        {"function-name",    required_argument, 0, 'f'},
-        {"write-flag",       no_argument,       0, 'w'},
-	{0,               0,                 0,  0 }
+					   {"replacement-file", required_argument, 0, 'r'},
+					   {"function-name",    required_argument, 0, 'f'},
+					   {"write-flag",       no_argument,       0, 'w'},
+					   {0,               0,                 0,  0 }
     };
   }
 #endif
@@ -437,31 +530,26 @@ int main(int argc, char** argv)
   init_tables();
 
   /*
-   * First build up a list of function names we want to replace from
-   * the list of explicit mock files.  All global function names
-   * defined in these files will be included.
+   * Figure out if we have elf32 or elf64 files by checking the first
+   * one.
    */
-  extract_function_names(dupfiles, funclist);
-
-  /*
-   * Identify object files with an identifed, i.e. labeled, section
-   * and add those function names to the list the function list.
-   * Also, saves the list of objfiles that did not contain labeled
-   * sections.
-   */
-  vector<string> objfiles;	// contain functions to be replaced
-  extract_labeled_function_names(infiles, funclist, section_name, objfiles);
+  switch (check_arch(*(infiles.begin()))) {
+  case ELFCLASS32:
+    process_files<Elf32_Ehdr, Elf32_Shdr, Elf32_Sym>(infiles, dupfiles, funclist, section_name, write_flag);
+    break;
+  case ELFCLASS64:
+    process_files<Elf64_Ehdr, Elf64_Shdr, Elf64_Sym>(infiles, dupfiles, funclist, section_name, write_flag);
+    break;
+  case ELFCLASSNONE:
+  default:
+    exit(1);
+    break;
+  }
 
   if (list_flag) {
     for_each(funclist.begin(), funclist.end(), [](auto p){ cout << p << endl; });
     exit(0);
   }
-
-  /*
-   * The non-mock files are the ones to modify
-   */
-  if (write_flag)
-    patch_files(objfiles, funclist);
 
   exit(0);
 }
