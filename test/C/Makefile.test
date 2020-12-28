@@ -4,7 +4,8 @@ failures	= test-single-func-fail
 
 SECTION		= .mock
 
-PRELINK		= ../mock-elfpatch -w
+PRELINK		= mock-elfpatch -w
+
 
 all:
 	@for x in $(targets); do \
@@ -12,6 +13,13 @@ all:
 	    $(MAKE) -f $(MAKEFILE_LIST) clean ;\
 	    $(MAKE) -f $(MAKEFILE_LIST) $$x ;\
 	    echo "executing $$x" ; ./$$x && echo PASS || echo FAIL ;\
+	done
+
+libs:
+	@for x in libfunc.a libfunc.so; do \
+	    echo "*** build $$x ***" ;\
+	    $(MAKE) -f $(MAKEFILE_LIST) clean ;\
+	    $(MAKE) -f $(MAKEFILE_LIST) $$x ;\
 	done
 
 test-link: test-single-func.o func.o
@@ -25,6 +33,14 @@ test-single-func: test-single-func.o mock-func.o func.o
 test-multi-func: test-multi-func.o mock-func.o func.o
 	${PRELINK} -m mock-func.o func.o
 	@$(LINK.c) $^ -o $@
+
+libfunc.a: func.o
+	ar -crs $@ $^
+
+libfunc.so: CFLAGS += -fPIC
+libfunc.so: LDFLAGS += -shared 
+libfunc.so: func.o
+	$(LINK.c) $^ -o $@
 
 test-section-func: LDFLAGS=-Xlinker --unique=$(SECTION)
 test-section-func: test-multi-func.o func-section.o func.o
