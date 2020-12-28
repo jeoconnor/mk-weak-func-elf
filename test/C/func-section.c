@@ -5,7 +5,7 @@
 #define _str(x)      #x
 #define SECTION_ATTRIBUTE __attribute__((section(stringify(CUSTOM_SECTION))))
 #else
-#define SECTION _ATTRIBUTE
+#define SECTION_ATTRIBUTE 
 #endif
 
 void func() SECTION_ATTRIBUTE;
