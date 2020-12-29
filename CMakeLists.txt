@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.13.0) 
-project("mock-elfpatch")
+cmake_minimum_required(VERSION 3.10.0) 
+project("test-double-elfpatch")
 
 set(BINARY ${CMAKE_PROJECT_NAME})
 
@@ -9,7 +9,7 @@ set(CMAKE_INSTALL_PREFIX "")
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 # Need to set to 20 to run gdb
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_C_FLAGS "-ggdb -Wall")
