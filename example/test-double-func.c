@@ -1,8 +1,8 @@
 #include <stdio.h>
 
-void func() __attribute__((section("test-double")));
+void f1() __attribute__((section(".stub")));
 
-void func()
+void f1()
 {
-  printf("test-double:func\n");
+  printf("%s:%s\n", __FILE__, __func__);
 }

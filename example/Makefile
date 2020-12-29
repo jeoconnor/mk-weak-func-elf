@@ -1,6 +1,6 @@
 targets		?= test1 test2 test3
 
-PRELINK		= ../test-double-elfpatch -w -s test-double
+PRELINK		= ../test-double-elfpatch -w -s .stub
 
 default: all
 

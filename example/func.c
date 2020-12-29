@@ -1,6 +1,12 @@
 #include <stdio.h>
 
-void func()
+void f1()
 {
-  printf("original:func\n");
+  printf("%s:%s\n", __FILE__, __func__);
 }
+
+void f2()
+{
+  printf("%s:%s\n", __FILE__, __func__);
+}
+
