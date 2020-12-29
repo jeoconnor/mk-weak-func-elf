@@ -146,17 +146,31 @@ char* get_section_string_buffer(ElfN_Ehdr* ehdr)
   return nullptr;
 }
 
+/*
+ * Returns a pointer to the start of the symbol string buffer.
+ * 
+ * Gcc has separate string buffers for the symbol table and the
+ * section header names while LLVM just uses a single string buffer.
+ */
 template<typename ElfNN_Shdr, typename ElfNN_Ehdr>
 char* get_symbol_string_buffer(ElfNN_Ehdr* ehdr)
 {
-  char* buffer = (char*)ehdr;
-  ElfNN_Shdr* shdr = (ElfNN_Shdr*)(buffer + ehdr->e_shoff);
+  char* ebuf = (char*)ehdr;
+  char* symbuf = nullptr;
+  char* shbuf = nullptr;
+  ElfNN_Shdr* shdr = (ElfNN_Shdr*)(ebuf + ehdr->e_shoff);
   for (int secno = 0; secno < ehdr->e_shnum; secno++, shdr++) {
-    if (shdr->sh_type == SHT_STRTAB && secno != ehdr->e_shstrndx) {
-      return (char*)(buffer + shdr->sh_offset);
+    if (shdr->sh_type == SHT_STRTAB) {
+      if (secno == ehdr->e_shstrndx) {
+	shbuf = (char*)(ebuf + shdr->sh_offset);
+      } else {
+	symbuf = (char*)(ebuf + shdr->sh_offset);
+      }
     }
   }
-  return nullptr;
+  if (symbuf == nullptr)
+    symbuf = shbuf;
+  return symbuf;
 }
 
 void get_last_directory_segment(string& s, const char delim, string& last_seg)
@@ -306,14 +320,19 @@ bool extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist, string& 
   ElfNN_Shdr* shdr = (ElfNN_Shdr*)(elfbuf + ehdr->e_shoff);
   for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
     if (shdr->sh_type == SHT_STRTAB) {
-      if (secno == ehdr->e_shstrndx)
+      if (secno == ehdr->e_shstrndx) {
 	shstrbuf = elfbuf + shdr->sh_offset;
-      else
+      } else {
 	strbuf = elfbuf + shdr->sh_offset;
+      }
     } else if (shdr->sh_type == SHT_SYMTAB) {
       symhdr = (ElfNN_Sym*)(elfbuf + shdr->sh_offset);
       numsyms = shdr->sh_size / shdr->sh_entsize;
     }
+  }
+
+  if (strbuf == nullptr) {
+    strbuf = shstrbuf;		// LLVM doesn't have separate string buffers
   }
 
   /*
