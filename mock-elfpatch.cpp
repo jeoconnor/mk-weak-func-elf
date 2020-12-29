@@ -498,14 +498,31 @@ int main(int argc, char** argv)
   vector<string> infiles;	// unclassified input files
   vector<string> funclist;	// use unordered_set?
 
-  string select_prefix("mock");
+  string prefix_name("mock");
   string section_name(".mock");
 
   bool list_flag = false;
   bool write_flag = false;	// This is the point but require explicit request
 
   int c;
-  while ((c = getopt(argc, argv, "r:f:lw")) != -1) {
+  while (true) {
+    // int this_option_optind = optind ? optind : 1;
+    int option_index = 0;
+    static struct option long_options[] = {
+      {"replacement-file", required_argument, 0, 'r'},
+      {"function-name",    required_argument, 0, 'f'},
+      {"section-name",     required_argument, 0, 's'},
+      {"prefix-name",      required_argument, 0, 'p'},
+      {"write-flag",       no_argument,       0, 'w'},
+      {"list",             no_argument      , 0, 'l'},
+      {"help",             no_argument      , 0, 'h'},
+      {0,               0,                 0,  0 }
+    };
+
+    c = getopt_long(argc, argv, "r:f:s:wlh", long_options, &option_index);
+    if (c == -1)
+      break;
+
     switch (c) {
     case 'r':
       dupfiles.push_back(optarg);
@@ -519,26 +536,26 @@ int main(int argc, char** argv)
     case 'w':
       write_flag = true;
       break;
+    case 's':
+      section_name = optarg;
+      break;
+    case 'p':
+      prefix_name = optarg;
+      break;
+    case 'h':
+      usage(argv[0]);
+      return 0;
+      break;
     default:
       usage(argv[0]);
+      return -1;
       break;
     }
   }
-#if 0
-  while (true) {
-    int this_option_optind = optind ? optind : 1;
-    int option_index = 0;
-    static struct option long_options[] = {
-					   {"replacement-file", required_argument, 0, 'r'},
-					   {"function-name",    required_argument, 0, 'f'},
-					   {"write-flag",       no_argument,       0, 'w'},
-					   {0,               0,                 0,  0 }
-    };
-  }
-#endif
+
   while (optind < argc) {
     string s = argv[optind];
-    if (file_has_select_prefix(s, select_prefix))
+    if (file_has_select_prefix(s, prefix_name))
       dupfiles.push_back(s);
     else
       infiles.push_back(s);
