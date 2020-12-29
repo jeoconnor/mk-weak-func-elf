@@ -22,15 +22,13 @@ map<int, string> stt_name;
 map<int, string> stb_name;
 map<int, string> sht_name;
 
-static tuple<void*, size_t> memory_map_file(string& file);
-static unsigned char verify_elf(void* hdr);
+tuple<void*, size_t> memory_map_file(string& file);
+unsigned char verify_elf(void* hdr);
 
 template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
 void process_files(vector<string>& infiles, vector<string>& dupfiles, vector<string>& funclist,
 		   string& section_name, bool write_flag);
 
-// template<typename ElfNN_Shdr, typename ElfNN_Sym, typename ElfNN_Ehdr>
-// bool extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist, string& secname);
 
 template <typename ElfNN_Ehdr>
 class ElfFile {
@@ -78,20 +76,49 @@ public:
 
 };
 
-using ElfFile64 = ElfFile<Elf64_Ehdr>;
-using ElfFile32 = ElfFile<Elf32_Ehdr>;
-
-static void usage(const char* name)
+string basename(string& argv0)
 {
-  cout << "help...\n"
-       << "more help...\n";
+  int npos = 0;
+  int nstart = 0;
+  for (auto p = argv0.begin(); p != argv0.end(); p++, npos++) {
+    if (*p == '/')
+      nstart = npos + 1;
+  }
+  return argv0.substr(nstart, string::npos);
+}
+
+void usage(string argv0)
+{
+  string progname = basename(argv0);
+
+  cout << "Usage: " << progname << " [Options] OBJFILES\n" <<
+    "\nDESCRIPTION\n" <<
+    "Modifies a set of Elf format relocatable object files to allow linking with additional\n" <<
+    "object files containing duplicated functions.  The purpose is to enable building test cases\n" <<
+    "using test doubles (mocks, stubs, etc.) without having to modify the original sources.\n" <<
+    "Supports both Elf32 and Elf64 formats and has been tested on X86_64 and ARM processors.\n\n" <<
+    "OBJFILES                              List of either Elf32 or Elf64 relocatable object files to\n" <<
+    "                                      be optionally modified.\n" <<
+    "\nOPTIONS:\n" <<
+    " -s --section-name=SECTION_NAME       Defines an alternate Elf text section (default .mock)\n" <<
+    "                                      in which test double functions will have been placed.\n" <<
+    " -r --replacement-file=TEST_DOUBLE_FILE   Elf relocatable object file containing function test\n" <<
+    "                                      doubles. They need not be labeled with a section attribute.\n" <<
+    "                                      Option may be invoked multiple times.\n" <<
+    " -p --prefix-name=PREFIX              Any filenames prefixed with PREFIX will be treated as\n" <<
+    "                                      test double files (default mock).\n" <<
+    " -w --write-flag                      Will set WEAK binding for selected functions\n" <<
+    "                                      in OBJFILES: excluding those with a text section\n" <<
+    "                                      labeled SECTION_NAME.\n" <<
+    " -l --list                            List function test doubles.\n" <<
+    " -h --help                            This help.\n\n";
 }
 
 /**
  * For now just define enough entries to get by with my easy test
  * cases but fill these out later.
  */
-static void init_tables()
+void init_tables()
 {
   sht_name[SHT_NULL]      = "NULL";
   sht_name[SHT_SYMTAB]    = "SYMTAB";
@@ -188,16 +215,19 @@ void get_last_directory_segment(string& s, const char delim, string& last_seg)
 
 bool file_has_select_prefix(string& filename, string& prefix)
 {
-  string dirname;
-  get_last_directory_segment(filename, '/', dirname);
-  return (prefix == dirname.substr(0, prefix.size()));
+  if (prefix.size() > 0) {
+    string dirname;
+    get_last_directory_segment(filename, '/', dirname);
+    return (prefix == dirname.substr(0, prefix.size()));
+  }
+  return false;
 }
 
 /**
  * Check if input ptr references a valid elf file.  Returns either
  * ELFCLASS32 or ELFCLASS64 on sucess or ELFCLASSNONE on failure.
  */
-static unsigned char verify_elf(void* ptr)
+unsigned char verify_elf(void* ptr)
 {
   unsigned char ei_class = ELFCLASSNONE;
 
@@ -240,11 +270,11 @@ static unsigned char verify_elf(void* ptr)
 
 char check_arch(string& filename)
 {
-  ElfFile64 elfFile(filename);
+  ElfFile<Elf64_Ehdr> elfFile(filename);
   return elfFile.check_arch();
 }
 
-static tuple<void*, size_t> memory_map_file(string& file)
+tuple<void*, size_t> memory_map_file(string& file)
 {
   if (file.size() == 0)
     return {nullptr, 0};
@@ -447,6 +477,16 @@ void extract_function_names(vector<string>& dupfiles, vector<string>& funclist)
   }
 }
 
+/**
+ * Extract from infiles function names contained in funclist that are
+ * located in the section_name text section and save those files to
+ * outfiles.  
+ * @param infiles list of input filenames 
+ * @param funclist list of function names 
+ * @param section_name the name of a labeled elf text section.
+ * Labeled in C/C++ code with the attribute,
+ * `__attribute__((section("NAME")))`
+ */
 template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
 void extract_labeled_function_names(vector<string>& infiles, vector<string>& funclist,
 				    string& section_name, vector<string>& outfiles)
@@ -468,23 +508,23 @@ template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
 void process_files(vector<string>& infiles, vector<string>& dupfiles, vector<string>& funclist,
 		   string& section_name, bool write_flag)
 {
-  /*
+  /**
    * First build up a list of function names we want to replace from
    * the list of explicit mock files.  All global function names
    * defined in these files will be included.
    */
   extract_function_names<ElfNN_Ehdr, ElfNN_Shdr, ElfNN_Sym>(dupfiles, funclist);
 
-  /*
+  /**
    * Identify object files with an identifed, i.e. labeled, section
    * and add those function names to the function list.
    * Also, saves the list of objfiles that did not contain labeled
    * sections.
    */
-  vector<string> objfiles;	// contain functions to be replaced
+  vector<string> objfiles;	// candidate files for modification
   extract_labeled_function_names<ElfNN_Ehdr, ElfNN_Shdr, ElfNN_Sym>(infiles, funclist, section_name, objfiles);
 
-  /*
+  /**
    * The non-mock files are the ones to modify
    */
   if (write_flag)
