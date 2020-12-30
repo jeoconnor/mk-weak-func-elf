@@ -15,7 +15,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_FLAGS "-ggdb -Wall")
 set(CMAKE_CXX_FLAGS "-ggdb -Wall")
 
-add_executable(${BINARY} mock-elfpatch.cpp)
+add_executable(${BINARY} main.cpp)
 
 target_link_options(${BINARY} PRIVATE -ggdb -lelf)
 
