@@ -29,6 +29,9 @@ template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
 void process_files(vector<string>& infiles, vector<string>& dupfiles, vector<string>& funclist,
 		   string& section_name, bool write_flag);
 
+template <typename ElfNN_Sym>
+void patch_file(ElfNN_Sym *shdr, char* symbuf, vector<string>& function_names);
+
 
 template <typename ElfNN_Ehdr>
 class ElfFile {
@@ -379,9 +382,6 @@ bool extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist, string& 
 
   return found;
 }
-
-template <typename ElfNN_Sym>
-void patch_file(ElfNN_Sym *shdr, char* symbuf, vector<string>& function_names);
 
 template <>
 void patch_file(Elf64_Sym *shdr, char* symbuf, vector<string>& function_names)
