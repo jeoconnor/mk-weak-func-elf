@@ -307,13 +307,13 @@ tuple<Elf64_Ehdr*, size_t> memory_map_elf_file(string& infile)
   return {(Elf64_Ehdr*)ptr, size};
 }
 
-inline bool symbol_check_type(Elf64_Sym* sym) {
+inline bool check_symbol_type(Elf64_Sym* sym) {
   return (sym->st_name > 0) &&
     (ELF64_ST_TYPE(sym->st_info) == STT_FUNC) &&
     (ELF64_ST_BIND(sym->st_info) == STB_GLOBAL);
 }
   
-inline bool symbol_check_type(Elf32_Sym* sym) {
+inline bool check_symbol_type(Elf32_Sym* sym) {
   return (sym->st_name > 0) &&
     (ELF32_ST_TYPE(sym->st_info) == STT_FUNC) &&
     (ELF32_ST_BIND(sym->st_info) == STB_GLOBAL);
@@ -365,7 +365,7 @@ bool extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist, string& 
    */
   auto [symhdr, numsyms] = get_symbol_table<ElfNN_Shdr, ElfNN_Sym>(ehdr);
   for (int n=0; n < numsyms; n++, symhdr++) {
-    if (symbol_check_type(symhdr)) {
+    if (check_symbol_type(symhdr)) {
       if (symhdr->st_shndx == custom_index || secname.size() == 0) {
 	string name = strbuf + symhdr->st_name;
 	cout << "adding " << name << " to function list\n";
@@ -387,7 +387,8 @@ template <>
 void patch_file(Elf64_Sym *shdr, char* symbuf, vector<string>& function_names)
 {
   // Maybe check also that it is GLOBAL?
-  if (shdr->st_name != 0 && ELF64_ST_TYPE(shdr->st_info) == STT_FUNC) {
+  // if (shdr->st_name != 0 && ELF64_ST_TYPE(shdr->st_info) == STT_FUNC) {
+  if (check_symbol_type(shdr)) {
     for (auto p=function_names.begin(); p!=function_names.end(); p++) {
       string func_name(symbuf + shdr->st_name);
       if (*p == func_name) {
@@ -402,7 +403,8 @@ template<>
 void patch_file(Elf32_Sym *shdr, char* symbuf, vector<string>& function_names)
 {
   // Maybe check also that it is GLOBAL?
-  if (shdr->st_name != 0 && ELF32_ST_TYPE(shdr->st_info) == STT_FUNC) {
+  // if (shdr->st_name != 0 && ELF32_ST_TYPE(shdr->st_info) == STT_FUNC) {
+  if (check_symbol_type(shdr)) {
     for (auto p=function_names.begin(); p!=function_names.end(); p++) {
       string func_name(symbuf + shdr->st_name);
       if (*p == func_name) {
