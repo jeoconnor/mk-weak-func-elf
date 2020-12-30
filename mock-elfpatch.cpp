@@ -29,6 +29,10 @@ template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
 void process_files(vector<string>& infiles, vector<string>& dupfiles, vector<string>& funclist,
 		   string& section_name, bool write_flag);
 
+/*
+ * Sets the BIND attribute in the symbol table to WEAK for functions
+ * in the function_names list.
+ */
 template <typename ElfNN_Sym>
 void patch_file(ElfNN_Sym *shdr, char* symbuf, vector<string>& function_names);
 
@@ -69,7 +73,8 @@ public:
     }
   }
 
-  bool ok() { return ehdr != nullptr && size != 0; }
+  bool ok() { return ehdr != nullptr && size > 0; }
+
   ElfNN_Ehdr* Handle() { return ehdr; }
   int Size() { return size; }
 
@@ -270,12 +275,24 @@ unsigned char verify_elf(void* ptr)
   return ei_class;
 }
 
+/*
+ * Determines if the file is ELFCLASS32, ELFCLASS64 or ELFCLASSNONE
+ * (none of the above) and returns one of these values.
+ *
+ * At this point the choice of Elf header structure type doesn't
+ * matter, that is, either the 32 or 64 bit version will work since
+ * only the commen part of the header is being examined.
+ */
 char check_arch(string& filename)
 {
   ElfFile<Elf64_Ehdr> elfFile(filename);
   return elfFile.check_arch();
 }
 
+/*
+ * Memory map in the file.  Returns a tuple of a pointer to the start
+ * of the file and the size of the file.
+ */
 tuple<void*, size_t> memory_map_file(string& file)
 {
   if (file.size() == 0)
@@ -299,11 +316,18 @@ tuple<void*, size_t> memory_map_file(string& file)
     return {nullptr, 0};
   }
 
+  /*
+   * No longer need to leave the file open once the it is mapped in.
+   */
   close(fd);
 
   return {ptr, statbuf.st_size};
 }
 
+/*
+ * Convenience wrapper around
+ * 'tuple<void*, size_t> memory_map_file(string& file)'
+ */
 tuple<Elf64_Ehdr*, size_t> memory_map_elf_file(string& infile)
 {
   auto [ptr, size] =  memory_map_file(infile);
@@ -322,6 +346,10 @@ inline bool check_symbol_type(Elf32_Sym* sym) {
     (ELF32_ST_BIND(sym->st_info) == STB_GLOBAL);
 }
 
+/*
+ * Returns the index in the Elf Section header table whose names
+ * matches section_name.
+ */
 template<typename ElfNN_Shdr, typename ElfNN_Ehdr>
 int get_section_index(ElfNN_Ehdr *ehdr, string& section_name)
 {
@@ -347,12 +375,18 @@ int get_section_index(ElfNN_Ehdr *ehdr, string& section_name)
   return section_index;
 }
   
+/*
+ * Find the global functions defined in the symbolt table that index
+ * to the Elf section named section_name.
+ * Found function names are added to function_names.
+ */
 template<typename ElfNN_Shdr, typename ElfNN_Sym, typename ElfNN_Ehdr>
-bool extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist, string& secname)
+bool extract_function_names(ElfNN_Ehdr* ehdr, string& section_name,
+			    vector<string>& function_names)
 {
   bool found = false;
 
-  int initial_function_number = funclist.size();
+  int initial_function_number = function_names.size();
 
   // Section header
   if (!ehdr->e_shoff) {
@@ -361,7 +395,7 @@ bool extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist, string& 
   }
 
   auto [strbuf, _] = get_string_buffers<ElfNN_Shdr>(ehdr);
-  int custom_index = get_section_index<ElfNN_Shdr>(ehdr, secname);
+  int section_index = get_section_index<ElfNN_Shdr>(ehdr, section_name);
 
   /*
    * Look for symbols referencing the special section
@@ -369,15 +403,15 @@ bool extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist, string& 
   auto [symhdr, numsyms] = get_symbol_table<ElfNN_Shdr, ElfNN_Sym>(ehdr);
   for (int n=0; n < numsyms; n++, symhdr++) {
     if (check_symbol_type(symhdr)) {
-      if (symhdr->st_shndx == custom_index || secname.size() == 0) {
+      if (symhdr->st_shndx == section_index || section_name.size() == 0) {
 	string name = strbuf + symhdr->st_name;
-	cout << "adding " << name << " to function list\n";
-	funclist.push_back(name);
+	cout << "test double list <= " << name << endl;
+	function_names.push_back(name);
       }
     }
   }
 
-  if (funclist.size() > initial_function_number)
+  if (function_names.size() > initial_function_number)
     found = true;
 
   return found;
@@ -441,7 +475,7 @@ template<typename ElfNN_Shdr, typename ElfNN_Sym, typename ElfNN_Ehdr>
 void extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist)
 {
   string secname("");
-  (void)extract_function_names<ElfNN_Shdr, ElfNN_Sym>(ehdr, funclist, secname);
+  (void)extract_function_names<ElfNN_Shdr, ElfNN_Sym>(ehdr, secname, funclist);
 }
 
 template<typename ElfNN_Ehdr, typename ElfNN_Shdr, typename ElfNN_Sym>
@@ -477,7 +511,7 @@ void extract_labeled_function_names(vector<string>& infiles, vector<string>& fun
     if (!ehdr)
       continue;
 
-    if (!extract_function_names<ElfNN_Shdr, ElfNN_Sym>(ehdr, funclist, section_name)) {
+    if (!extract_function_names<ElfNN_Shdr, ElfNN_Sym>(ehdr, section_name, funclist)) {
       outfiles.push_back(*pFile);
     }
   }
