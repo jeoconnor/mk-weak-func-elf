@@ -1,4 +1,4 @@
-`test-double-elfpatch` modifies a set of Elf format relocatable object
+`mk-weakfunc-elf` modifies a set of Elf format relocatable object
 files to allow linking with additional object files containing
 duplicated functions. This enables a method to provide replacement
 functions (test doubles) without the need to modify original sources
@@ -59,7 +59,7 @@ There are therefore three methods for defining function test doubles.
 1. Decorating function test doubles with the `__attribute__((section(...)))` syntax.
 
 2. If the option `-p PREFIX` is supplied as a command line argument to
-   the `test-double-elfpatch` command, then functions defined in a
+   the `mk-weakfunc-elf` command, then functions defined in a
    files beginning with that `PREFIX` will be treated as test double
    functions.
    
@@ -75,7 +75,7 @@ requires keeping the original and test double files separate.
 __EXAMPLE__ 
 
 The `examples` directory contains a simple example demonstrating
-`test-double-elfpatch` in action.
+`mk-weakfunc-elf` in action.
 
 `main()` implemented in `main.c` calls the two functions, `f1()` and
 `f2()` which are both defined in `func.c`.  `stub.c` also defines
@@ -99,7 +99,7 @@ following shows the result of first building and executing with just
     cc    -c -o main.o main.c
     cc    -c -o func.o func.c
     cc    -c -o stub.o stub.c
-    ../test-double-elfpatch -w -s .stub main.o func.o stub.o
+    ../mk-weakfunc-elf -w -s .stub main.o func.o stub.o
     adding f1 to function list
     cc     -o ex2 main.o func.o stub.o
     *** Executing ex2 
