@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10.0) 
-project("test-double-elfpatch")
+project("mk-weakfunc-elf")
 
 set(BINARY ${CMAKE_PROJECT_NAME})
 

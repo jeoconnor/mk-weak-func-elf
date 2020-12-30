@@ -1,7 +1,7 @@
 targets		?= ex1 ex2
 target_fails	?= ex-fail
 
-PRELINK		= ../test-double-elfpatch -w -s .stub
+PRELINK		= ../mk-weakfunc-elf -w -s .stub
 
 default: all
 

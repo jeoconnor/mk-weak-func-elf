@@ -3,7 +3,7 @@
 import sys
 import subprocess
 
-prelink_args = ["test-double-elfpatch", "-w"]
+prelink_args = ["mk-weakfunc-elf", "-w"]
 objfiles = [arg for arg in sys.argv[2:] if arg[-2:] == ".o"]
 
 subprocess.run(prelink_args + objfiles)
