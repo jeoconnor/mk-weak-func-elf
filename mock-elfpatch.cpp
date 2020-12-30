@@ -139,6 +139,9 @@ static void init_tables()
   stb_name[STB_WEAK]      = "WEAK";
 }
 
+/*
+ * Returns a pointer to the start of the section header table.
+ */
 template <typename ElfNN_Shdr, typename ElfNN_Ehdr>
 ElfNN_Shdr* get_section_header(ElfNN_Ehdr* ehdr)
 {
@@ -146,6 +149,10 @@ ElfNN_Shdr* get_section_header(ElfNN_Ehdr* ehdr)
   return (ElfNN_Shdr*)(buffer + ehdr->e_shoff);
 }
 
+/*
+ * Finds the start of the symbol table and returns a tuple of the
+ * pointer to the first byte of the table and the number of entries.
+ */
 template <typename ElfNN_Shdr, typename ElfNN_Sym, typename ElfNN_Ehdr>
 tuple<ElfNN_Sym*, int> get_symbol_table(ElfNN_Ehdr* ehdr)
 {
@@ -188,7 +195,12 @@ tuple<char*, char*> get_string_buffers(ElfNN_Ehdr* ehdr)
   return {symbuf, shbuf};
 }
 
-void get_last_directory_segment(string& s, const char delim, string& last_seg)
+/*
+ * Converts strings like a/b/c => c, ./a => a, and b => b.
+ *
+ * 
+ */
+string get_last_directory_segment(string& s, const char delim)
 {
   int n = 0;
   int npos = n;
@@ -198,14 +210,13 @@ void get_last_directory_segment(string& s, const char delim, string& last_seg)
   }
   if (npos > 0)
     npos++;
-  last_seg = s.substr(npos);
+  return s.substr(npos);
 }
 
 bool file_has_select_prefix(string& filename, string& prefix)
 {
   if (prefix.size() > 0) {
-    string dirname;
-    get_last_directory_segment(filename, '/', dirname);
+    auto dirname = get_last_directory_segment(filename, '/');
     return (prefix == dirname.substr(0, prefix.size()));
   }
   return false;
