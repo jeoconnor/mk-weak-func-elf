@@ -76,7 +76,7 @@ public:
 
 };
 
-string basename(string& argv0)
+static string basename(string& argv0)
 {
   int npos = 0;
   int nstart = 0;
@@ -118,7 +118,7 @@ void usage(string argv0)
  * For now just define enough entries to get by with my easy test
  * cases but fill these out later.
  */
-void init_tables()
+static void init_tables()
 {
   sht_name[SHT_NULL]      = "NULL";
   sht_name[SHT_SYMTAB]    = "SYMTAB";
@@ -147,7 +147,7 @@ ElfNN_Shdr* get_section_header(ElfNN_Ehdr* ehdr)
 }
 
 template <typename ElfNN_Shdr, typename ElfNN_Sym, typename ElfNN_Ehdr>
-tuple<ElfNN_Sym*, int> get_symbol_header(ElfNN_Ehdr* ehdr)
+tuple<ElfNN_Sym*, int> get_symbol_table(ElfNN_Ehdr* ehdr)
 {
   char* buffer = (char*)ehdr;
   auto shdr = get_section_header<ElfNN_Shdr>(ehdr);
@@ -160,27 +160,13 @@ tuple<ElfNN_Sym*, int> get_symbol_header(ElfNN_Ehdr* ehdr)
   return {nullptr, 0};
 }
 
-template <typename ElfNN_Shdr, typename ElfN_Ehdr>
-char* get_section_string_buffer(ElfN_Ehdr* ehdr)
-{
-  char* buffer = (char*)ehdr;
-  ElfNN_Shdr* shdr = (ElfNN_Shdr*)(buffer + ehdr->e_shoff);
-  for (int secno = 0; secno < ehdr->e_shnum; secno++, shdr++) {
-    if (shdr->sh_type == SHT_STRTAB && secno == ehdr->e_shstrndx) {
-      return (buffer + shdr->sh_offset);
-    }
-  }
-  return nullptr;
-}
-
 /*
- * Returns a pointer to the start of the symbol string buffer.
- * 
- * Gcc has separate string buffers for the symbol table and the
- * section header names while LLVM just uses a single string buffer.
+ * Returns a pair of char pointers to the beginning of the symbol and
+ * section header string buffers, respectively. For LLVM at least, the
+ * two pointers will be the same.
  */
 template<typename ElfNN_Shdr, typename ElfNN_Ehdr>
-char* get_symbol_string_buffer(ElfNN_Ehdr* ehdr)
+tuple<char*, char*> get_string_buffers(ElfNN_Ehdr* ehdr)
 {
   char* ebuf = (char*)ehdr;
   char* symbuf = nullptr;
@@ -195,9 +181,11 @@ char* get_symbol_string_buffer(ElfNN_Ehdr* ehdr)
       }
     }
   }
+  // LLVM only defines a single string buffer
   if (symbuf == nullptr)
     symbuf = shbuf;
-  return symbuf;
+
+  return {symbuf, shbuf};
 }
 
 void get_last_directory_segment(string& s, const char delim, string& last_seg)
@@ -319,6 +307,31 @@ inline bool symbol_check_type(Elf32_Sym* sym) {
     (ELF32_ST_TYPE(sym->st_info) == STT_FUNC) &&
     (ELF32_ST_BIND(sym->st_info) == STB_GLOBAL);
 }
+
+template<typename ElfNN_Shdr, typename ElfNN_Ehdr>
+int get_section_index(ElfNN_Ehdr *ehdr, string& section_name)
+{
+  int section_index = 0;
+  /*
+   * Scan through the section header string table looking for the
+   * section with the name matching section_name
+   */
+  auto [_, shstrbuf] = get_string_buffers<ElfNN_Shdr>(ehdr);
+  if (section_name.size() > 0) {
+    // Find section index for custom section
+    auto shdr = get_section_header<ElfNN_Shdr>(ehdr);
+    for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
+      if (shdr->sh_name != 0) {
+	if (section_name == shstrbuf + shdr->sh_name) {
+	  section_index = secno;
+	  // cout << "custom index is " << section_index << endl;
+	  break;
+	}
+      }
+    }
+  }
+  return section_index;
+}
   
 template<typename ElfNN_Shdr, typename ElfNN_Sym, typename ElfNN_Ehdr>
 bool extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist, string& secname)
@@ -333,60 +346,13 @@ bool extract_function_names(ElfNN_Ehdr* ehdr, vector<string>& funclist, string& 
     return false;
   }
 
-  char* elfbuf = (char*)ehdr;
-  
-  ElfNN_Sym* symhdr = nullptr;	// symbol table
-
-  char* shstrbuf = nullptr;	// section header string buffer
-  char* strbuf = nullptr;	// symbol name string buffer
-
-  /*
-   * Scan through the section header table locating the symbol string
-   * buffer, the section header symbol string buffer and the symbol
-   * table.  Result is pointers to each plus the number of entries in
-   * the symbol table.
-   */
-  int numsyms = 0;		// No. entries in the symbol table
-  ElfNN_Shdr* shdr = (ElfNN_Shdr*)(elfbuf + ehdr->e_shoff);
-  for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
-    if (shdr->sh_type == SHT_STRTAB) {
-      if (secno == ehdr->e_shstrndx) {
-	shstrbuf = elfbuf + shdr->sh_offset;
-      } else {
-	strbuf = elfbuf + shdr->sh_offset;
-      }
-    } else if (shdr->sh_type == SHT_SYMTAB) {
-      symhdr = (ElfNN_Sym*)(elfbuf + shdr->sh_offset);
-      numsyms = shdr->sh_size / shdr->sh_entsize;
-    }
-  }
-
-  if (strbuf == nullptr) {
-    strbuf = shstrbuf;		// LLVM doesn't have separate string buffers
-  }
-
-  /*
-   * Now scan through the section header symbol table looking for our
-   * special section.
-   */
-  int custom_index = 0;
-  if (secname.size() > 0) {
-    // Find section index for custom section
-    shdr = (ElfNN_Shdr*)(elfbuf + ehdr->e_shoff);
-    for (int secno=0; secno<ehdr->e_shnum; secno++, shdr++) {
-      if (shdr->sh_name != 0) {
-	if (secname == shstrbuf + shdr->sh_name) {
-	  custom_index = secno;
-	  // cout << "custom index is " << custom_index << endl;
-	  break;
-	}
-      }
-    }
-  }
+  auto [strbuf, _] = get_string_buffers<ElfNN_Shdr>(ehdr);
+  int custom_index = get_section_index<ElfNN_Shdr>(ehdr, secname);
 
   /*
    * Look for symbols referencing the special section
    */
+  auto [symhdr, numsyms] = get_symbol_table<ElfNN_Shdr, ElfNN_Sym>(ehdr);
   for (int n=0; n < numsyms; n++, symhdr++) {
     if (symbol_check_type(symhdr)) {
       if (symhdr->st_shndx == custom_index || secname.size() == 0) {
@@ -409,7 +375,7 @@ void patch_file(ElfNN_Sym *shdr, char* symbuf, vector<string>& function_names);
 template <>
 void patch_file(Elf64_Sym *shdr, char* symbuf, vector<string>& function_names)
 {
-  // XXX check also that it is GLOBAL
+  // Maybe check also that it is GLOBAL?
   if (shdr->st_name != 0 && ELF64_ST_TYPE(shdr->st_info) == STT_FUNC) {
     for (auto p=function_names.begin(); p!=function_names.end(); p++) {
       string func_name(symbuf + shdr->st_name);
@@ -424,7 +390,7 @@ void patch_file(Elf64_Sym *shdr, char* symbuf, vector<string>& function_names)
 template<>
 void patch_file(Elf32_Sym *shdr, char* symbuf, vector<string>& function_names)
 {
-  // XXX check also that it is GLOBAL
+  // Maybe check also that it is GLOBAL?
   if (shdr->st_name != 0 && ELF32_ST_TYPE(shdr->st_info) == STT_FUNC) {
     for (auto p=function_names.begin(); p!=function_names.end(); p++) {
       string func_name(symbuf + shdr->st_name);
@@ -446,8 +412,8 @@ void patch_files(vector<string>& objfiles, vector<string>& function_names)
     if (!ehdr)
       continue;
 
-    char* symbuf = get_symbol_string_buffer<ElfNN_Shdr>(ehdr);
-    auto [symhdr, nsyms] = get_symbol_header<ElfNN_Shdr, ElfNN_Sym>(ehdr);
+    auto [symbuf, _] = get_string_buffers<ElfNN_Shdr>(ehdr);
+    auto [symhdr, nsyms] = get_symbol_table<ElfNN_Shdr, ElfNN_Sym>(ehdr);
     for (int idx=0; idx < nsyms; idx++, symhdr++) {
       patch_file<ElfNN_Sym>(symhdr, symbuf, function_names);
     }
