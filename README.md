@@ -4,18 +4,116 @@ duplicated functions. This enables a method to provide replacement
 functions (test doubles) without the need to modify original sources
 or avoid linking their object files.  This is done by setting the
 function's bind attribute in the original object file's symbol table
-to WEAK permitting giving preference to the function test double.
+to WEAK thus giving preference to the function test double.
 
 Replacement functions are identified by being defined in distinct
 files or by being explicitly labeled as such with a named section
-attribute.  For example (this works for C/C++ in both GCC and Clang)
+attribute.  For example the following locates the function `func` in
+the custom Elf section, `.stub` which otherwise wouldn't exist.
 
-    void func() __attribute__((section("test-double")));
+    #include <stdio.h>
+    
+    void f1() __attribute__((section(".stub")));
+    
+    void f1()
+    {
+	  printf("%s:%s\n", __FILE__, __func__);
+    }
 
-The choice of the section name defined between the double quotes above
-is arbitrary but must not be the name of an existing Elf section
-header.  Section headers can be displayed with the `readelf`
-command. This example was compiled with GCC.
+The result of compiling this file and examining the object file output
+with the `readelf` utility yields:
+
+    $ readelf -WS stub.o
+    There are 15 section headers, starting at offset 0x398:
+    
+    Section Headers:
+      [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+      [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
+      [ 1] .text             PROGBITS        0000000000000000 000040 000000 00  AX  0   0  1
+      [ 2] .data             PROGBITS        0000000000000000 000040 000000 00  WA  0   0  1
+      [ 3] .bss              NOBITS          0000000000000000 000040 000000 00  WA  0   0  1
+      [ 4] .rodata           PROGBITS        0000000000000000 000040 000011 00   A  0   0  1
+      [ 5] .stub             PROGBITS        0000000000000000 000051 00002a 00  AX  0   0  1
+      [ 6] .rela.stub        RELA            0000000000000000 0002a0 000060 18   I 12   5  8
+      [ 7] .comment          PROGBITS        0000000000000000 00007b 00002b 01  MS  0   0  1
+      [ 8] .note.GNU-stack   PROGBITS        0000000000000000 0000a6 000000 00      0   0  1
+      [ 9] .note.gnu.property NOTE            0000000000000000 0000a8 000020 00   A  0   0  8
+      [10] .eh_frame         PROGBITS        0000000000000000 0000c8 000038 00   A  0   0  8
+      [11] .rela.eh_frame    RELA            0000000000000000 000300 000018 18   I 12  10  8
+      [12] .symtab           SYMTAB          0000000000000000 000100 000168 18     13  12  8
+      [13] .strtab           STRTAB          0000000000000000 000268 000036 00      0   0  1
+      [14] .shstrtab         STRTAB          0000000000000000 000318 00007a 00      0   0  1
+    Key to Flags:
+      W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+      L (link order), O (extra OS processing required), G (group), T (TLS),
+      C (compressed), x (unknown), o (OS specific), E (exclude),
+      l (large), p (processor specific)
+    
+The section header entry, `[5]`, is created as a result of adding the
+`__attribute__((section(".stub")))` addition above.  Entries in the symbol
+table, not shown here, will point to this code segment rather than to
+the default, `.text`, segment.
+
+There are therefore three methods for defining function test doubles.
+
+1. Decorating function test doubles with the `__attribute__((section(...)))` syntax.
+
+2. If the option `-p PREFIX` is supplied as a command line argument to
+   the `test-double-elfpatch` command, then functions defined in a
+   files beginning with that `PREFIX` will be treated as test double
+   functions.
+   
+3. Functions defined in files selected with the `-f FILENAME` option
+   will also be treated as test double functions. This option may be
+   used multiple times.
+
+The advantage of methods 1 and 2 in a build environment is that they
+both allow all the object files to be treated uniformly.  Method 3
+requires keeping the original and test double files separate.
+
+
+__EXAMPLE__ 
+
+The `examples` directory contains a simple example demonstrating
+`test-double-elfpatch` in action.
+
+`main()` implemented in `main.c` calls the two functions, `f1()` and
+`f2()` which are both defined in `func.c`.  `stub.c` also defines
+`f1()` but labeled with `__attribute__((section("")))` feature.  The
+following shows the result of first building and executing with just
+`main.c` and `func.c` and then doing the same but with `stub.c` added.
+
+    $ make
+    *** Building ex1 ***
+    rm -f *.o ex1 ex2
+    cc    -c -o main.o main.c
+    cc    -c -o func.o func.c
+    cc     -o ex1 main.o func.o
+    *** Executing ex1 
+    main.c:main
+    func.c:f1
+    func.c:f2
+    OK
+    *** Building ex2 ***
+    rm -f *.o ex1 ex2
+    cc    -c -o main.o main.c
+    cc    -c -o func.o func.c
+    cc    -c -o stub.o stub.c
+    ../test-double-elfpatch -w -s .stub main.o func.o stub.o
+    adding f1 to function list
+    cc     -o ex2 main.o func.o stub.o
+    *** Executing ex2 
+    main.c:main
+    stub.c:f1
+    func.c:f2
+    OK
+
+Both examples build and execute correctly, but the second example
+executes the copy of `f1()` defined in `stub.c` rather than the one in
+`func.c` as in the first example.
+
+
+This example was compiled with GCC.
 
     $ readelf -S func.o
     There are 16 section headers, starting at offset 0x31c:
@@ -44,43 +142,5 @@ command. This example was compiled with GCC.
       C (compressed), x (unknown), o (OS specific), E (exclude),
       p (processor specific)
 
-On Ubuntu the `readelf` command is found in the `binutils` package.
 
-The `examples` directory contains a simple example demonstrating
-`test-double-elfpatch` in action.
-
-`main()` defined in `main.c` calls the two functions, `f1()` and
-`f2()` which are both defined in `func.c`.  `stub.c` also defines
-`f1()` but labeled with `__attribute__((section("")))`.  The following
-shows the result of first building and executing with `main.c` and
-`func.c` and then doing the same bit with `stub()` included.
-
-    $ make
-    *** Building ex1 ***
-    rm -f *.o ex1 ex2
-    cc    -c -o main.o main.c
-    cc    -c -o func.o func.c
-    cc     -o ex1 main.o func.o
-    *** Executing ex1 
-    main.c:main
-    func.c:f1
-    func.c:f2
-    OK
-    *** Building ex2 ***
-    rm -f *.o ex1 ex2
-    cc    -c -o main.o main.c
-    cc    -c -o func.o func.c
-    cc    -c -o stub.o stub.c
-    ../test-double-elfpatch -w -s .stub main.o func.o stub.o
-    adding f1 to function list
-    cc     -o ex2 main.o func.o stub.o
-    *** Executing ex2 
-    main.c:main
-    stub.c:f1
-    func.c:f2
-    OK
-
-In the first case the instances of both `f1()` and `f2()` defined in
-`func.c` are executed.  In the second example, the copy of `f1()`
-defined in `stub.c` is called instead.
 
