@@ -17,7 +17,7 @@ set(CMAKE_CXX_FLAGS "-ggdb -Wall")
 
 add_executable(${BINARY} main.cpp)
 
-target_link_options(${BINARY} PRIVATE -ggdb -lelf)
+target_link_options(${BINARY} PRIVATE -ggdb)
 
 install(TARGETS ${BINARY})
 
