@@ -142,5 +142,15 @@ This example was compiled with GCC.
       C (compressed), x (unknown), o (OS specific), E (exclude),
       p (processor specific)
 
+__BUILDING__
 
+To build just execute `make`.
+
+This code was compiled on LinuxMint 20 with both
+
+    clang++ clang version 10.0.0-4ubuntu1
+	
+and
+
+    g++ (Ubuntu 9.3.0-17ubuntu1~20.04) 9.3.0
 
